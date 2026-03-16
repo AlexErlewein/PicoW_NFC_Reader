@@ -1,0 +1,26 @@
+{
+  "include": [
+    ".",
+    "lib"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv"
+  ],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": false,
+  "reportMissingImports": false,
+  "reportAttributeAccessIssue": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownParameterType": false,
+  "reportOptionalMemberAccess": false,
+  "reportOptionalCall": false,
+  "reportOptionalIterable": false,
+  "reportOptionalContextManager": false,
+  "reportOptionalOperand": false,
+  "reportUndefinedVariable": false
+}

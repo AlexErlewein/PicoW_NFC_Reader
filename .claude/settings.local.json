@@ -8,7 +8,11 @@
       "Bash(uv run ruff check .)",
       "Bash(uv run ruff check . --fix)",
       "Bash(uv run ruff format --check .)",
-      "Bash(uv run ruff format .)"
+      "Bash(uv run ruff format .)",
+      "Bash(uv run pyright . --verbose)",
+      "Bash(uv run pip show micropython-rp2-stubs)",
+      "Bash(uv pip list)",
+      "Bash(uv run python -m py_compile main.py config.py lib/*.py)"
     ]
   }
 }

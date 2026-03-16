@@ -39,6 +39,9 @@ venv = ".venv"
 reportMissingModuleSource = false   # MicroPython-Module haben nur Stubs, keinen Quellcode
 reportMissingImports = false        # umqtt, machine etc. sind nur auf dem Pico verfügbar
 reportAttributeAccessIssue = false  # MicroPython-Module haben andere Attribute als stdlib
+reportUnknownMemberType = false     # Unbekannte Typen in MicroPython-Modulen
+reportUnknownVariableType = false   # Unbekannte Variablentypen
+reportUnknownParameterType = false  # Unbekannte Parametertypen
 
 [build-system]
 requires = ["hatchling"]
