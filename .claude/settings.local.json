@@ -12,7 +12,11 @@
       "Bash(uv run pyright . --verbose)",
       "Bash(uv run pip show micropython-rp2-stubs)",
       "Bash(uv pip list)",
-      "Bash(uv run python -m py_compile main.py config.py lib/*.py)"
+      "Bash(uv run python -m py_compile main.py config.py lib/*.py)",
+      "Bash(ls -la .venv/Scripts/mpremote*)",
+      "Bash(ls -la .venv/bin/mpremote*)",
+      "Bash(.venv/Scripts/mpremote.exe exec \"import mip; mip.install\\(''umqtt.simple''\\)\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/micropython/micropython-lib/master/micropython/umqtt.simple/umqtt/simple.py\" -o lib/umqtt/simple.py)"
     ]
   }
 }
