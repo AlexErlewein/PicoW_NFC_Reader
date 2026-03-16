@@ -3,7 +3,12 @@
     "allow": [
       "Bash(uv sync)",
       "Bash(git mv pn532.py mqtt_manager.py wifi.py lib/)",
-      "Bash(git mv deploy.sh scripts/)"
+      "Bash(git mv deploy.sh scripts/)",
+      "Bash(uv run pyright .)",
+      "Bash(uv run ruff check .)",
+      "Bash(uv run ruff check . --fix)",
+      "Bash(uv run ruff format --check .)",
+      "Bash(uv run ruff format .)"
     ]
   }
 }

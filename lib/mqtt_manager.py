@@ -5,6 +5,7 @@ Nutzt umqtt.simple aus der MicroPython-Standardbibliothek.
 
 import json
 import time
+
 from umqtt.simple import MQTTClient as _MQTTClient
 
 
@@ -32,13 +33,14 @@ class MQTTManager:
         """Verbindet mit dem MQTT Broker. Gibt True bei Erfolg zurück."""
         for attempt in range(1, retries + 1):
             try:
-                self._client = _MQTTClient(
+                client = _MQTTClient(
                     self._client_id,
                     self._broker,
                     port=self._port,
                     keepalive=self._keepalive,
                 )
-                self._client.connect()
+                client.connect()  # pyright: ignore[reportOptionalMemberAccess]
+                self._client = client
                 print(f"[MQTT] Verbunden mit {self._broker}:{self._port}")
                 return True
             except Exception as e:
@@ -46,7 +48,7 @@ class MQTTManager:
                 time.sleep(2)
         return False
 
-    def publish_tag(self, tag: dict, extra: dict = None):
+    def publish_tag(self, tag: dict, extra: dict | None = None):
         """
         Publiziert einen NFC-Tag-Read als JSON.
         tag: dict vom PN532 (uid_hex, tag_type, atqa, sak, …)
@@ -56,11 +58,11 @@ class MQTTManager:
             raise MQTTError("Nicht verbunden")
 
         payload = {
-            "uid":       tag.get("uid_hex", ""),
-            "uid_dec":   tag.get("uid_dec", 0),
-            "tag_type":  tag.get("tag_type", ""),
-            "atqa":      tag.get("atqa", ""),
-            "sak":       tag.get("sak", ""),
+            "uid": tag.get("uid_hex", ""),
+            "uid_dec": tag.get("uid_dec", 0),
+            "tag_type": tag.get("tag_type", ""),
+            "atqa": tag.get("atqa", ""),
+            "sak": tag.get("sak", ""),
         }
         if extra:
             payload.update(extra)

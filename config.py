@@ -8,10 +8,9 @@ try:
     with open("config.json", "r") as f:
         _cfg = ujson.load(f)
 except OSError:
-    raise RuntimeError(
-        "config.json nicht gefunden! "
-        "Kopiere example-config.json nach config.json und passe die Werte an."
-    )
+    msg = "config.json nicht gefunden!"
+    msg += " Kopiere example-config.json nach config.json und passe die Werte an."
+    raise RuntimeError(msg)
 
 # --- WLAN ---
 WIFI_SSID = _cfg["wifi_ssid"]

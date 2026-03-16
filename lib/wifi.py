@@ -2,8 +2,9 @@
 WLAN-Verbindungshelfer für den Pico W.
 """
 
-import network
 import time
+
+import network
 
 
 class WifiError(Exception):

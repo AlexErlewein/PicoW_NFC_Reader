@@ -4,12 +4,13 @@ NFC-Tags per I2C lesen und via MQTT weiterleiten.
 """
 
 import time
+
+import wifi
 from machine import I2C, Pin
 
 import config
-import wifi
+from lib.mqtt_manager import MQTTError, MQTTManager
 from lib.pn532 import PN532, PN532Error
-from lib.mqtt_manager import MQTTManager, MQTTError
 
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)

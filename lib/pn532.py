@@ -4,6 +4,7 @@ Unterstützt: ISO14443A (MIFARE Classic, MIFARE Ultralight, NTAG)
 """
 
 import time
+
 from machine import I2C
 
 # PN532 I2C Adresse (default)
@@ -11,14 +12,14 @@ PN532_I2C_ADDRESS = 0x24
 
 # Kommandos
 CMD_GETFIRMWAREVERSION = 0x02
-CMD_SAMCONFIGURATION   = 0x14
+CMD_SAMCONFIGURATION = 0x14
 CMD_INLISTPASSIVETARGET = 0x4A
 
 # Frame-Bytes
-PREAMBLE   = 0x00
+PREAMBLE = 0x00
 STARTCODE1 = 0x00
 STARTCODE2 = 0xFF
-POSTAMBLE  = 0x00
+POSTAMBLE = 0x00
 HOSTTOPN532 = 0xD4
 PN532TOHOST = 0xD5
 
@@ -88,12 +89,12 @@ class PN532:
             raise PN532Error("Ungültiger Frame-Header")
 
         data_len = frame[4]
-        return frame[6:6 + data_len - 1]  # ohne TFI
+        return bytearray(frame[6 : 6 + data_len - 1])  # ohne TFI
 
-    def _send_command(self, cmd: int, params: list = None):
+    def _send_command(self, cmd: int, params: list | None = None):
         if params is None:
             params = []
-        data = [HOSTTOPN532, cmd] + params
+        data = [HOSTTOPN532, cmd] + params  # type: ignore[reportArgumentType]
         self._write_frame(data)
         time.sleep_ms(50)
 
@@ -109,10 +110,10 @@ class PN532:
         self._send_command(CMD_GETFIRMWAREVERSION)
         resp = self._read_response(6)
         return {
-            "ic":       resp[0],
-            "ver":      resp[1],
-            "rev":      resp[2],
-            "support":  resp[3],
+            "ic": resp[0],
+            "ver": resp[1],
+            "rev": resp[2],
+            "support": resp[3],
         }
 
     def sam_configuration(self):
@@ -146,19 +147,19 @@ class PN532:
 
             # resp[1] = Tg (target number)
             atqa = (resp[2] << 8) | resp[3]
-            sak  = resp[4]
+            sak = resp[4]
             uid_len = resp[5]
-            uid = bytes(resp[6:6 + uid_len])
+            uid = bytes(resp[6 : 6 + uid_len])
 
             tag_type = TAG_TYPES.get(sak, f"Unbekannt (SAK=0x{sak:02X})")
 
             return {
-                "uid":      uid,
-                "uid_hex":  uid.hex().upper(),
-                "uid_dec":  int.from_bytes(uid, "big"),
+                "uid": uid,
+                "uid_hex": uid.hex().upper(),
+                "uid_dec": int.from_bytes(uid, "big"),
                 "tag_type": tag_type,
-                "atqa":     f"0x{atqa:04X}",
-                "sak":      f"0x{sak:02X}",
+                "atqa": f"0x{atqa:04X}",
+                "sak": f"0x{sak:02X}",
             }
 
         return None  # Timeout
