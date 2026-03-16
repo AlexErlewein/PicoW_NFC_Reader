@@ -1,0 +1,47 @@
+[project]
+name = "pico-nfc-mqtt"
+version = "0.1.0"
+description = "PN532 NFC reader on Pico W → MQTT via MicroPython"
+requires-python = ">=3.11"
+
+# Nur Dev-Tools – laufen auf dem Entwicklungsrechner, NICHT auf dem Pico
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mpremote>=1.24.0",       # Pico W: Dateien übertragen & REPL
+    "ruff>=0.9.0",            # Linter / Formatter
+    "pyright>=1.1.0",         # Type-Checker (versteht MicroPython-Stubs via stub-Paket)
+    "micropython-rp2-stubs>=1.24.0",  # Stubs für machine, network, umqtt usw.
+]
+
+[tool.uv]
+# Dev-Abhängigkeiten immer installieren
+default-groups = ["dev"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# MicroPython nutzt keine __all__, viele builtins fehlen im Host-Python → locker konfigurieren
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # Zeilenlänge – ruff format kümmert sich darum
+    "F821",   # Unbekannte Namen (MicroPython-Builtins)
+]
+
+[tool.pyright]
+pythonVersion = "3.11"
+# Stubs für machine, network, umqtt etc. kommen vom micropython-rp2-stubs Paket
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = false   # MicroPython-Module haben nur Stubs, keinen Quellcode
+reportMissingImports = false        # umqtt, machine etc. sind nur auf dem Pico verfügbar
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

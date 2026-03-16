@@ -1,0 +1,16 @@
+{
+  "_comment": "Kopiere diese Datei nach config.json und passe deine Werte an",
+  "wifi_ssid": "DEIN_WLAN_NAME",
+  "wifi_password": "DEIN_WLAN_PASSWORT",
+  "mqtt_broker": "192.168.1.100",
+  "mqtt_port": 1883,
+  "mqtt_client_id": "pico_nfc_01",
+  "mqtt_topic_prefix": "nfc",
+  "mqtt_keepalive_s": 60,
+  "i2c_bus": 0,
+  "i2c_sda": 4,
+  "i2c_scl": 5,
+  "i2c_freq": 100000,
+  "read_interval_ms": 200,
+  "debounce_same_tag_s": 2
+}
