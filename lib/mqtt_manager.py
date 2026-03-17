@@ -42,11 +42,32 @@ class MQTTManager:
                 client.connect()  # pyright: ignore[reportOptionalMemberAccess]
                 self._client = client
                 print(f"[MQTT] Verbunden mit {self._broker}:{self._port}")
+
+                # Sende Status-Message für GroundControl Dashboard
+                self.publish_status("online")
                 return True
             except Exception as e:
                 print(f"[MQTT] Verbindung fehlgeschlagen (Versuch {attempt}/{retries}): {e}")
                 time.sleep(2)
         return False
+
+    def publish_status(self, status: str):
+        """
+        Publiziert den Gerätestatus.
+        Wird vom GroundControl Dashboard erkannt.
+        """
+        if self._client is None:
+            raise MQTTError("Nicht verbunden")
+
+        payload = json.dumps({"status": status, "timestamp": time.time()})
+        topic = f"{self._topic_prefix}/status"
+        try:
+            self._client.publish(topic, payload)
+            print(f"[MQTT] Status gesendet: {status}")
+        except Exception as e:
+            print(f"[MQTT] Status-Publish fehlgeschlagen: {e}")
+            self._client = None
+            raise MQTTError(str(e))
 
     def publish_tag(self, tag: dict, extra: dict | None = None):
         """
@@ -89,5 +110,10 @@ class MQTTManager:
 
     def disconnect(self):
         if self._client:
+            # Sende Offline-Status bevor disconnect
+            try:
+                self.publish_status("offline")
+            except Exception:
+                pass  # Best effort, fehler hier sind nicht kritisch
             self._client.disconnect()
             self._client = None

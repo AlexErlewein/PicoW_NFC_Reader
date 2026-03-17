@@ -97,18 +97,19 @@ def main():
     ping_timer = time.time()
 
     # --- Hauptschleife ---
-    while True:
-        now = time.time()
+    try:
+        while True:
+            now = time.time()
 
-        # MQTT Keepalive
-        if now - ping_timer > 30:
-            mqtt.ping()
-            ping_timer = now
+            # MQTT Keepalive
+            if now - ping_timer > 30:
+                mqtt.ping()
+                ping_timer = now
 
-        # Reconnect wenn nötig
-        if not mqtt.is_connected():
-            print("[MAIN] MQTT getrennt, reconnect …")
-            mqtt.connect()
+            # Reconnect wenn nötig
+            if not mqtt.is_connected():
+                print("[MAIN] MQTT getrennt, reconnect …")
+                mqtt.connect()
 
         # NFC lesen
         try:
@@ -141,7 +142,16 @@ def main():
         except MQTTError as e:
             print(f"[MAIN] Publish-Fehler: {e}")
 
-        nfc.wait_for_tag_removed()
+            nfc.wait_for_tag_removed()
+
+    except Exception as e:
+        print(f"[MAIN] Fehler: {e}")
+        blink(5, 100)
+    finally:
+        # Aufräumen beim Beenden
+        print("[MAIN] Beende...")
+        mqtt.disconnect()
+        print("[MAIN] MQTT disconnected")
 
 
 # Automatisch starten wenn direkt ausgeführt oder vom Boot geladen
