@@ -115,9 +115,7 @@ def main():
     # Initialer Heartbeat mit NFC-Status senden
     try:
         mqtt.publish_heartbeat(
-            nfc_ok=NFC_STATUS_OK,
-            nfc_error=NFC_ERROR_MSG,
-            uptime=int(time.time())
+            nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(time.time())
         )
     except MQTTError as e:
         print(f"[MAIN] Initialer Heartbeat fehlgeschlagen: {e}")
@@ -142,9 +140,7 @@ def main():
             if now - heartbeat_timer > 60:
                 try:
                     mqtt.publish_heartbeat(
-                        nfc_ok=NFC_STATUS_OK,
-                        nfc_error=NFC_ERROR_MSG,
-                        uptime=int(now)
+                        nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(now)
                     )
                     print("[HEARTBEAT] Status gesendet")
                 except MQTTError as e:
@@ -205,7 +201,7 @@ def main():
         print("[MAIN] Beende...")
         try:
             mqtt.publish_status("offline")
-        except:
+        except MQTTError:
             pass
         mqtt.disconnect()
         print("[MAIN] MQTT disconnected")
