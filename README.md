@@ -119,6 +119,24 @@ mosquitto_sub -h localhost -t 'nfc/#' -v
 
 ## MQTT Payload (Beispiel)
 
+### Heartbeat (alle 60 Sekunden)
+
+Topic: `nfc/heartbeat`
+
+```json
+{
+  "status": "online",
+  "nfc_ok": true,
+  "nfc_error": null,
+  "uptime": 12345,
+  "timestamp": "12345.67"
+}
+```
+
+Der Heartbeat zeigt an, ob die NFC-Hardware verfügbar ist. Das GroundControl Dashboard kann diese Statusinformationen anzeigen.
+
+### Tag-Scan
+
 Topic: `nfc/tag`
 
 ```json
@@ -142,9 +160,9 @@ Topic: `nfc/tag`
 | 3× kurz | WLAN verbunden |
 | 1× lang | Alles OK, warte auf Tags |
 | 1× kurz | Tag erfolgreich gesendet |
+| 4× mittel | NFC-Fehler, aber MQTT läuft weiter |
 | 10× schnell | WLAN-Fehler |
 | 5× mittel | MQTT-Fehler |
-| 7× kurz | NFC-Initialisierungsfehler |
 
 ---
 
@@ -154,6 +172,7 @@ Topic: `nfc/tag`
 - I2C-Mode-Jumper am Modul prüfen
 - Verdrahtung prüfen (SDA=GP4, SCL=GP5)
 - `mpremote repl` → `from machine import I2C, Pin; I2C(0, sda=Pin(4), scl=Pin(5)).scan()`
+- **Hinweis:** Der Pico W läuft weiter und sendet Heartbeat mit `nfc_ok: false`
 
 **MQTT Verbindung schlägt fehl:**
 - Pi-IP korrekt in `config.json`?

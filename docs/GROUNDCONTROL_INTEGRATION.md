@@ -23,7 +23,36 @@ The PicoW publishes to these topics:
 |-------|---------|---------|
 | `picow_nfc_01/status` | `{"status": "online"}` | Sent on connection |
 | `picow_nfc_01/status` | `{"status": "offline"}` | Sent on disconnect |
+| `picow_nfc_01/heartbeat` | `{...heartbeat data...}` | Sent every 60s with NFC status |
 | `picow_nfc_01/tag` | `{...tag data...}` | NFC tag scan |
+
+## Heartbeat Data Format
+
+The heartbeat message (sent every 60 seconds) includes NFC hardware status:
+
+```json
+{
+  "status": "online",
+  "nfc_ok": true,
+  "nfc_error": null,
+  "uptime": 12345,
+  "timestamp": 1710745200.123
+}
+```
+
+When NFC hardware fails or is not connected:
+
+```json
+{
+  "status": "online",
+  "nfc_ok": false,
+  "nfc_error": "PN532 nicht gefunden! Verdrahtung prüfen (SDA=GP4, SCL=GP5)",
+  "uptime": 12345,
+  "timestamp": 1710745200.123
+}
+```
+
+This allows the GroundControl dashboard to show whether the NFC hardware is working even when MQTT connection is fine.
 
 ## Tag Data Format
 

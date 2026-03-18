@@ -69,6 +69,32 @@ class MQTTManager:
             self._client = None
             raise MQTTError(str(e))
 
+    def publish_heartbeat(self, nfc_ok: bool, nfc_error: str | None = None, uptime: int = 0):
+        """
+        Publiziert einen Heartbeat mit Systemstatus.
+        Wird vom GroundControl Dashboard zur Geräteeinordnung genutzt.
+        """
+        if self._client is None:
+            raise MQTTError("Nicht verbunden")
+
+        payload = {
+            "status": "online",
+            "nfc_ok": nfc_ok,
+            "uptime": uptime,
+            "timestamp": time.time()
+        }
+        if nfc_error:
+            payload["nfc_error"] = nfc_error
+
+        topic = f"{self._topic_prefix}/heartbeat"
+        try:
+            self._client.publish(topic, json.dumps(payload))
+            # Kein print bei jedem Heartbeat zu vermeiden von Spam
+        except Exception as e:
+            print(f"[MQTT] Heartbeat-Publish fehlgeschlagen: {e}")
+            self._client = None
+            raise MQTTError(str(e))
+
     def publish_tag(self, tag: dict, extra: dict | None = None):
         """
         Publiziert einen NFC-Tag-Read als JSON.
