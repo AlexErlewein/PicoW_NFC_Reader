@@ -123,6 +123,33 @@ class MQTTManager:
             self._client = None  # Reconnect beim nächsten Mal erzwingen
             raise MQTTError(str(e))
 
+    def set_command_callback(self, callback):
+        """Setzt einen Callback für eingehende Commands."""
+        if self._client is None:
+            raise MQTTError("Nicht verbunden")
+        self._client.set_callback(callback)
+
+    def subscribe_commands(self):
+        """Abonniert das Command-Topic."""
+        if self._client is None:
+            raise MQTTError("Nicht verbunden")
+        topic = f"{self._topic_prefix}/command"
+        try:
+            self._client.subscribe(topic)
+            print(f"[MQTT] Subscribed to '{topic}'")
+        except Exception as e:
+            print(f"[MQTT] Subscribe fehlgeschlagen: {e}")
+            raise MQTTError(str(e))
+
+    def check_messages(self):
+        """Prüft auf eingehende MQTT-Nachrichten (non-blocking)."""
+        if self._client:
+            try:
+                self._client.check_msg()
+            except Exception as e:
+                print(f"[MQTT] check_msg fehlgeschlagen: {e}")
+                self._client = None
+
     def ping(self):
         """Keepalive-Ping, sollte regelmäßig aufgerufen werden."""
         if self._client:

@@ -14,10 +14,40 @@ from lib.pn532 import PN532, PN532Error
 
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
+led_state = False
 
 # NFC-Hardware-Status
 NFC_STATUS_OK = False
 NFC_ERROR_MSG = None
+
+
+def handle_command(topic: bytes, msg: bytes):
+    """Verarbeitet eingehende MQTT-Commands."""
+    global led_state
+    try:
+        command = msg.decode("utf-8").strip()
+        print(f"[CMD] Received: {command}")
+        
+        if command == "led_toggle":
+            led_state = not led_state
+            if led_state:
+                led.on()
+                print("[CMD] LED turned ON")
+            else:
+                led.off()
+                print("[CMD] LED turned OFF")
+        elif command == "led_on":
+            led_state = True
+            led.on()
+            print("[CMD] LED turned ON")
+        elif command == "led_off":
+            led_state = False
+            led.off()
+            print("[CMD] LED turned OFF")
+        else:
+            print(f"[CMD] Unknown command: {command}")
+    except Exception as e:
+        print(f"[CMD] Error processing command: {e}")
 
 
 def blink(times: int = 1, on_ms: int = 100, off_ms: int = 100):
@@ -101,6 +131,13 @@ def main():
         blink(5, 200)
         return
 
+    # Command-Handler registrieren und Topic abonnieren
+    mqtt.set_command_callback(handle_command)
+    try:
+        mqtt.subscribe_commands()
+    except MQTTError as e:
+        print(f"[FEHLER] Command subscription fehlgeschlagen: {e}")
+
     # 3. NFC (optional - läuft weiter auch ohne NFC!)
     nfc = setup_nfc()
     if nfc is None:
@@ -130,6 +167,9 @@ def main():
     try:
         while True:
             now = time.time()
+
+            # 0. MQTT Messages prüfen (non-blocking)
+            mqtt.check_messages()
 
             # 1. MQTT Keepalive (alle 30s)
             if now - ping_timer > 30:
