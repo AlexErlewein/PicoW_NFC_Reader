@@ -75,8 +75,8 @@ def setup_nfc() -> PN532 | None:
         freq=config.I2C_FREQ,
     )
 
-    # Kurze Pause damit PN532 hochfährt
-    time.sleep_ms(100)
+    # Längere Pause damit PN532 komplett hochfährt
+    time.sleep_ms(500)
 
     # I2C-Scan zur Fehlerdiagnose
     devices = i2c.scan()
@@ -92,7 +92,7 @@ def setup_nfc() -> PN532 | None:
         nfc = PN532(i2c)
         fw = nfc.get_firmware_version()
         print(f"[NFC] PN532 Firmware: v{fw['ver']}.{fw['rev']}")
-        nfc.sam_configuration()
+        nfc.SAM_configuration()
         print("[NFC] Bereit.")
         NFC_STATUS_OK = True
         NFC_ERROR_MSG = None
@@ -201,7 +201,7 @@ def main():
             if nfc is not None and (now - read_timer) > (config.READ_INTERVAL_MS / 1000):
                 read_timer = now
                 try:
-                    tag = nfc.read_passive_target(timeout_ms=100)
+                    tag = nfc.read_passive_target(timeout=0.1)
                 except PN532Error as e:
                     print(f"[NFC] Lesefehler: {e}")
                     time.sleep_ms(500)

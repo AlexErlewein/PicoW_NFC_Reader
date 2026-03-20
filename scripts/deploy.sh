@@ -58,8 +58,10 @@ echo "→ main.py"
 $MPREMOTE connect $PORT cp main.py :main.py
 
 echo ""
-echo "✓ Fertig! Starte REPL …"
-echo "  (Strg+C zum Unterbrechen, Strg+X zum Beenden)"
+echo "✓ Fertig! REPL wird gestartet..."
+echo "  Drücke Ctrl+D für Soft-Reset (main.py startet)"
+echo "  (Strg+X zum Beenden)"
 echo ""
 
+# REPL starten
 $MPREMOTE connect $PORT repl
