@@ -168,6 +168,9 @@ Topic: `nfc/tag`
 
 ## Fehlerbehebung
 
+kein USB: sudo usermod -aG dialout alex
+
+
 **PN532 nicht gefunden:**
 - I2C-Mode-Jumper am Modul prüfen
 - Verdrahtung prüfen (SDA=GP4, SCL=GP5)
