@@ -29,6 +29,15 @@ _ACK = b"\x00\x00\xff\x00\xff\x00"
 
 _MIFARE_ISO14443A = 0x00
 
+# MIFARE Classic Kommandos
+_MIFARE_CMD_AUTH_A = 0x60
+_MIFARE_CMD_AUTH_B = 0x61
+_MIFARE_CMD_READ = 0x30
+_MIFARE_CMD_WRITE = 0xA0
+
+# Standard MIFARE Key (Factory Default)
+MIFARE_DEFAULT_KEY = b'\xff\xff\xff\xff\xff\xff'
+
 # Tag-Typen
 TAG_TYPES = {
     0x00: "MIFARE Classic 1K",
@@ -273,3 +282,80 @@ class PN532:
             "atqa": f"0x{atqa:04X}",
             "sak": f"0x{sak:02X}",
         }
+
+    # ------------------------------------------------------------------
+    # MIFARE Classic Read/Write
+    # ------------------------------------------------------------------
+
+    def mifare_authenticate(self, uid: bytes, block: int, key: bytes = MIFARE_DEFAULT_KEY, key_type: str = "A") -> bool:
+        """Authenticate with a MIFARE Classic sector.
+
+        Args:
+            uid: 4-byte card UID
+            block: Block number (0-63 for 1K, 0-255 for 4K)
+            key: 6-byte key (default: factory default)
+            key_type: "A" or "B" (default: A)
+
+        Returns:
+            True if authentication succeeded
+        """
+        if len(key) != 6:
+            raise PN532Error("Key must be 6 bytes")
+        if len(uid) < 4:
+            raise PN532Error("UID must be at least 4 bytes")
+
+        # Authentication command
+        auth_cmd = _MIFARE_CMD_AUTH_A if key_type == "A" else _MIFARE_CMD_AUTH_B
+
+        # Parameters: auth_cmd, block, key (6 bytes), UID (4 bytes)
+        params = bytes([auth_cmd, block]) + key + uid[:4]
+
+        try:
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
+            return response[0] == 0x00  # Success
+        except PN532Error:
+            return False
+
+    def mifare_read_block(self, block: int) -> bytes:
+        """Read 16 bytes from a MIFARE Classic block.
+
+        Args:
+            block: Block number (must be authenticated first)
+
+        Returns:
+            16 bytes of block data
+        """
+        params = bytes([_MIFARE_CMD_READ, block])
+
+        try:
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=17, params=params)
+            if response[0] != 0x00:
+                raise PN532Error(f"Read failed: 0x{response[0]:02X}")
+            return response[1:]  # Skip status byte
+        except PN532Error as e:
+            raise PN532Error(f"Failed to read block {block}: {e}")
+
+    def mifare_write_block(self, block: int, data: bytes) -> bool:
+        """Write 16 bytes to a MIFARE Classic block.
+
+        Args:
+            block: Block number (must be authenticated first)
+            data: Exactly 16 bytes to write
+
+        Returns:
+            True if write succeeded
+        """
+        if len(data) != 16:
+            raise PN532Error("Data must be exactly 16 bytes")
+
+        # Do not allow writing to sector trailer blocks (3, 7, 11, 15, ...)
+        if block % 4 == 3:
+            raise PN532Error(f"Block {block} is a sector trailer - writing not allowed")
+
+        params = bytes([_MIFARE_CMD_WRITE, block]) + data
+
+        try:
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
+            return response[0] == 0x00  # Success
+        except PN532Error as e:
+            raise PN532Error(f"Failed to write block {block}: {e}")

@@ -161,6 +161,21 @@ class MQTTManager:
     def is_connected(self) -> bool:
         return self._client is not None
 
+    def publish_write_response(self, result: dict):
+        """Publish card write operation result."""
+        if self._client is None:
+            raise MQTTError("Nicht verbunden")
+
+        topic = f"{self._topic_prefix}/write_response"
+        payload = json.dumps(result)
+        try:
+            self._client.publish(topic, payload)
+            print(f"[MQTT] Write response: {result}")
+        except Exception as e:
+            print(f"[MQTT] Write response failed: {e}")
+            self._client = None
+            raise MQTTError(str(e))
+
     def disconnect(self):
         if self._client:
             # Sende Offline-Status bevor disconnect
