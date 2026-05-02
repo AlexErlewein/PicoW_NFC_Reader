@@ -1,28 +1,31 @@
-# Pico W – PN532 NFC → MQTT
+# Pico W – RC522 NFC → MQTT
 
-NFC-Tags per I2C lesen und als JSON via MQTT weiterleiten.
+NFC-Tags per SPI lesen und als JSON via MQTT weiterleiten.
 
 ---
 
-## Verdrahtung (I2C)
+## Verdrahtung (SPI)
 
 ```
-PN532 Modul          Pico W
+RC522 Modul          Pico W
 ─────────────────────────────
-VCC  ──────────────► 3V3 (Pin 36)
+3V3  ──────────────► 3V3 (Pin 36)
 GND  ──────────────► GND (Pin 38)
-SDA  ──────────────► GP4 (Pin 6)
-SCL  ──────────────► GP5 (Pin 7)
+RST  ──────────────► GP22 (Pin 29)
+SDA  ──────────────► GP5 (Pin 7)  - SPI CS
+SCK  ──────────────► GP6 (Pin 9)  - SPI SCK
+MOSI ──────────────► GP7 (Pin 10) - SPI MOSI
+MISO ──────────────► GP4 (Pin 6)  - SPI MISO
+IRQ  ──────────────► (optional, nicht benötigt)
 ```
-
-> **Wichtig:** Das ElecHouse-Modul hat einen Mode-Jumper.
-> Stelle sicher, dass er auf **I2C** steht (beide Jumper auf der I2C-Seite).
 
 ```
 Pico W Pin-Übersicht (relevant):
-  Pin 1  = GP0
-  Pin 6  = GP4  ← SDA
-  Pin 7  = GP5  ← SCL
+  Pin 6  = GP4  ← MISO
+  Pin 7  = GP5  ← CS
+  Pin 9  = GP6  ← SCK
+  Pin 10 = GP7  ← MOSI
+  Pin 29 = GP22 ← RST
   Pin 36 = 3V3
   Pin 38 = GND
 ```
@@ -38,7 +41,7 @@ pico-nfc-mqtt/
 ├── config.json           # Konfiguration (nicht in Git)
 ├── example-config.json   # Konfigurations-Beispiel
 ├── lib/
-│   ├── pn532.py          # PN532 I2C Treiber
+│   ├── rc522.py          # RC522 SPI Treiber
 │   ├── mqtt_manager.py   # MQTT Client Wrapper
 │   └── wifi.py           # WLAN-Verbindung
 ├── scripts/
@@ -171,10 +174,9 @@ Topic: `nfc/tag`
 kein USB: sudo usermod -aG dialout alex
 
 
-**PN532 nicht gefunden:**
-- I2C-Mode-Jumper am Modul prüfen
-- Verdrahtung prüfen (SDA=GP4, SCL=GP5)
-- `mpremote repl` → `from machine import I2C, Pin; I2C(0, sda=Pin(4), scl=Pin(5)).scan()`
+**RC522 nicht gefunden:**
+- Verdrahtung prüfen (SCK=GP6, MOSI=GP7, MISO=GP4, CS=GP5, RST=GP22)
+- `mpremote repl` → `from machine import SPI, Pin; SPI(0, sck=Pin(6), mosi=Pin(7), miso=Pin(4))`
 - **Hinweis:** Der Pico W läuft weiter und sendet Heartbeat mit `nfc_ok: false`
 
 **MQTT Verbindung schlägt fehl:**

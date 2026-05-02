@@ -1,17 +1,17 @@
 """
 main.py – Einstiegspunkt für den Pico W
-NFC-Tags per I2C lesen und via MQTT weiterleiten.
+NFC-Tags per SPI lesen und via MQTT weiterleiten.
 """
 
 import json
 import time
 
 import wifi
-from machine import I2C, Pin
+from machine import Pin, SPI
 
 import config
 from lib.mqtt_manager import MQTTError, MQTTManager
-from lib.pn532 import PN532, PN532Error, MIFARE_DEFAULT_KEY
+from lib.rc522 import MIFARE_DEFAULT_KEY, RC522, RC522Error
 
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
@@ -92,49 +92,48 @@ def get_timestamp() -> str:
     return str(time.time())
 
 
-def setup_nfc() -> PN532 | None:
+def setup_nfc() -> RC522 | None:
     """Initialisiert NFC-Hardware. Gibt None bei Fehler zurück (setzt globale Status-Variablen)."""
     global NFC_STATUS_OK, NFC_ERROR_MSG
 
-    print("[NFC] Initialisiere I2C …")
-    i2c = I2C(
-        config.I2C_BUS,
-        sda=Pin(config.I2C_SDA),
-        scl=Pin(config.I2C_SCL),
-        freq=config.I2C_FREQ,
+    print("[NFC] Initialisiere SPI …")
+    spi = SPI(
+        config.SPI_BUS,
+        baudrate=config.SPI_FREQ,
+        polarity=0,
+        phase=0,
+        sck=Pin(config.SPI_SCK),
+        mosi=Pin(config.SPI_MOSI),
+        miso=Pin(config.SPI_MISO),
     )
+    cs = Pin(config.SPI_CS, Pin.OUT)
+    rst = Pin(config.SPI_RST, Pin.OUT)
 
-    # Längere Pause damit PN532 komplett hochfährt
+    # Längere Pause damit RC522 komplett hochfährt
     time.sleep_ms(500)
 
-    # I2C-Scan zur Fehlerdiagnose
-    devices = i2c.scan()
-    print(f"[NFC] Gefundene I2C-Geräte: {[hex(d) for d in devices]}")
-    if 0x24 not in devices:
-        error = "PN532 nicht gefunden! Verdrahtung prüfen (SDA=GP4, SCL=GP5)"
-        print(f"[NFC] FEHLER: {error}")
-        NFC_STATUS_OK = False
-        NFC_ERROR_MSG = error
-        return None
-
     try:
-        nfc = PN532(i2c)
+        nfc = RC522(spi, cs, rst, debug=True)
         fw = nfc.get_firmware_version()
-        print(f"[NFC] PN532 Firmware: v{fw['ver']}.{fw['rev']}")
-        nfc.SAM_configuration()
+        print(f"[NFC] RC522 Firmware: v{fw['ver']}.{fw['rev']}")
+
+        # Debug: Register lesen
+        print("[NFC] Debug: TX_CONTROL_REG =", hex(nfc._read_register(0x14)))
+        print("[NFC] Debug: COMIRQ_REG =", hex(nfc._read_register(0x04)))
+
         print("[NFC] Bereit.")
         NFC_STATUS_OK = True
         NFC_ERROR_MSG = None
         return nfc
     except Exception as e:
-        error = f"PN532 Initialisierung fehlgeschlagen: {e}"
+        error = f"RC522 Initialisierung fehlgeschlagen: {e}"
         print(f"[NFC] FEHLER: {error}")
         NFC_STATUS_OK = False
         NFC_ERROR_MSG = error
         return None
 
 
-def perform_card_write(nfc: PN532, tag: dict, job: dict) -> dict:
+def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
     """Write member data to MIFARE Classic card.
 
     Data layout (Sector 1 for 1K cards):
@@ -245,106 +244,38 @@ def main():
         blink(10, 50)  # Schnelles Blinken = WLAN-Fehler
         return
 
-    # 2. MQTT
-    mqtt = MQTTManager(
-        broker_ip=config.MQTT_BROKER,
-        client_id=config.MQTT_CLIENT_ID,
-        port=config.MQTT_PORT,
-        topic_prefix=config.MQTT_TOPIC_PREFIX,
-        keepalive=config.MQTT_KEEPALIVE_S,
-    )
-    if not mqtt.connect():
-        print("[FEHLER] MQTT-Verbindung fehlgeschlagen")
-        blink(5, 200)
-        return
-
-    # Command-Handler registrieren und Topic abonnieren
-    mqtt.set_command_callback(handle_command)
-    try:
-        mqtt.subscribe_commands()
-    except MQTTError as e:
-        print(f"[FEHLER] Command subscription fehlgeschlagen: {e}")
+    # 2. MQTT (vorübergehend deaktiviert für NFC-Test)
+    print("[SKIP] MQTT vorübergehend deaktiviert für NFC-Test")
+    mqtt = None
 
     # 3. NFC (optional - läuft weiter auch ohne NFC!)
     nfc = setup_nfc()
     if nfc is None:
-        print("[WARNUNG] NFC-Hardware nicht verfügbar - MQTT läuft ohne NFC")
-        blink(4, 150)  # 4× mittel = NFC Fehler, aber weiter
+        print("[WARNUNG] NFC-Hardware nicht verfügbar")
+        blink(4, 150)  # 4× mittel = NFC Fehler
+        return
     else:
         print("[NFC] Hardware erfolgreich initialisiert")
         blink(1, 500)  # 1× lang = alles OK
 
-    print("\n[MAIN] Hauptgestartet - warte auf Tags…\n")
-
-    # Initialer Heartbeat mit NFC-Status senden
-    try:
-        mqtt.publish_heartbeat(
-            nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(time.time())
-        )
-    except MQTTError as e:
-        print(f"[MAIN] Initialer Heartbeat fehlgeschlagen: {e}")
+    print("\n[MAIN] NFC-Test-Modus - warte auf Tags…\n")
 
     last_uid = None
     last_seen = 0
-    ping_timer = time.time()
-    heartbeat_timer = time.time()
     read_timer = time.time()
 
-    # --- Hauptschleife ---
+    # --- Hauptschleife (NFC-Test ohne MQTT) ---
     try:
         while True:
             now = time.time()
 
-            # 0. MQTT Messages prüfen (non-blocking)
-            mqtt.check_messages()
-
-            # 1. MQTT Keepalive (alle 30s)
-            if now - ping_timer > 30:
-                mqtt.ping()
-                ping_timer = now
-
-            # 2. Heartbeat mit NFC-Status (alle 60s)
-            if now - heartbeat_timer > 60:
-                try:
-                    mqtt.publish_heartbeat(
-                        nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(now)
-                    )
-                    print("[HEARTBEAT] Status gesendet")
-                except MQTTError as e:
-                    print(f"[HEARTBEAT] Fehler: {e}")
-                heartbeat_timer = now
-
-            # 3. MQTT Reconnect wenn nötig
-            if not mqtt.is_connected():
-                print("[MAIN] MQTT getrennt, reconnect …")
-                if mqtt.connect():
-                    print("[MAIN] MQTT reconnect erfolgreich")
-                else:
-                    print("[MAIN] MQTT reconnect fehlgeschlagen")
-                    time.sleep(5)
-                    continue
-
-            # 4. NFC lesen (nur wenn Hardware verfügbar)
+            # NFC lesen
             if nfc is not None and (now - read_timer) > (config.READ_INTERVAL_MS / 1000):
                 read_timer = now
 
-                # Check for write job timeout
-                global current_write_job
-                if current_write_job and now > current_write_job["timeout"]:
-                    print("[WRITE] Job timeout - clearing")
-                    try:
-                        mqtt.publish_write_response({
-                            "success": False,
-                            "error": "Timeout - no card presented within 30s",
-                            "request_id": current_write_job.get("request_id", "")
-                        })
-                    except MQTTError:
-                        pass
-                    current_write_job = None
-
                 try:
                     tag = nfc.read_passive_target(timeout=0.1)
-                except PN532Error as e:
+                except RC522Error as e:
                     print(f"[NFC] Lesefehler: {e}")
                     time.sleep_ms(500)
                     continue
@@ -356,60 +287,21 @@ def main():
                 uid = tag["uid_hex"]
                 print(f"[NFC] Tag erkannt: {uid} ({tag['tag_type']})")
 
-                # Check for pending write job
-                if current_write_job:
-                    print(f"[WRITE] Executing write job for card {uid}")
-                    result = perform_card_write(nfc, tag, current_write_job)
-                    try:
-                        mqtt.publish_write_response(result)
-                    except MQTTError as e:
-                        print(f"[WRITE] Failed to publish response: {e}")
-                    current_write_job = None
-
-                    # Still publish normal tag read after write
-                    try:
-                        mqtt.publish_tag(tag, extra={"timestamp": get_timestamp(), "written": True})
-                    except MQTTError:
-                        pass
-
-                    led.on()
-                    time.sleep_ms(100)
-                    led.off()
-                    last_uid = uid
-                    last_seen = now
-                    continue
-
                 # Debounce: gleichen Tag nicht zu oft senden
                 if uid == last_uid and (now - last_seen) < config.DEBOUNCE_SAME_TAG_S:
                     continue
 
-                # Publizieren
-                try:
-                    mqtt.publish_tag(tag, extra={"timestamp": get_timestamp()})
-                    led.on()
-                    time.sleep_ms(50)
-                    led.off()
-                    last_uid = uid
-                    last_seen = now
-                except MQTTError as e:
-                    print(f"[MAIN] Publish-Fehler: {e}")
-
+                led.on()
+                time.sleep_ms(100)
+                led.off()
+                last_uid = uid
+                last_seen = now
             else:
-                # Kurze Pause wenn kein NFC oder Reading Interval
                 time.sleep_ms(50)
 
     except Exception as e:
         print(f"[MAIN] Fehler: {e}")
         blink(5, 100)
-    finally:
-        # Aufräumen beim Beenden
-        print("[MAIN] Beende...")
-        try:
-            mqtt.publish_status("offline")
-        except MQTTError:
-            pass
-        mqtt.disconnect()
-        print("[MAIN] MQTT disconnected")
 
 
 # Automatisch starten wenn direkt ausgeführt oder vom Boot geladen

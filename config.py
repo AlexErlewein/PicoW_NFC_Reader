@@ -23,11 +23,14 @@ MQTT_CLIENT_ID = _cfg["mqtt_client_id"]
 MQTT_TOPIC_PREFIX = _cfg["mqtt_topic_prefix"]
 MQTT_KEEPALIVE_S = _cfg["mqtt_keepalive_s"]
 
-# --- I2C Pins (Pico W) ---
-I2C_BUS = _cfg["i2c_bus"]
-I2C_SDA = _cfg["i2c_sda"]
-I2C_SCL = _cfg["i2c_scl"]
-I2C_FREQ = _cfg["i2c_freq"]
+# --- SPI Pins (Pico W) ---
+SPI_BUS = _cfg["spi_bus"]
+SPI_SCK = _cfg["spi_sck"]
+SPI_MOSI = _cfg["spi_mosi"]
+SPI_MISO = _cfg["spi_miso"]
+SPI_CS = _cfg["spi_cs"]
+SPI_FREQ = _cfg["spi_freq"]
+SPI_RST = _cfg["spi_rst"]
 
 # --- Verhalten ---
 READ_INTERVAL_MS = _cfg["read_interval_ms"]

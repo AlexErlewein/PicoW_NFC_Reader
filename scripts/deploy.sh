@@ -38,8 +38,8 @@ $MPREMOTE connect $PORT mkdir lib/umqtt 2>/dev/null || true
 echo "→ lib/umqtt/simple.py"
 $MPREMOTE connect $PORT cp lib/umqtt/simple.py :lib/umqtt/simple.py
 
-echo "→ lib/pn532.py"
-$MPREMOTE connect $PORT cp lib/pn532.py :lib/pn532.py
+echo "→ lib/rc522.py"
+$MPREMOTE connect $PORT cp lib/rc522.py :lib/rc522.py
 
 echo "→ lib/mqtt_manager.py"
 $MPREMOTE connect $PORT cp lib/mqtt_manager.py :lib/mqtt_manager.py

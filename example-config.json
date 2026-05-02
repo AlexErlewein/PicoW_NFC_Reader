@@ -9,10 +9,13 @@
   "mqtt_client_id": "picow_nfc_01",
   "mqtt_topic_prefix": "picow_nfc_01",
   "mqtt_keepalive_s": 60,
-  "i2c_bus": 0,
-  "i2c_sda": 4,
-  "i2c_scl": 5,
-  "i2c_freq": 100000,
+  "spi_bus": 0,
+  "spi_sck": 6,
+  "spi_mosi": 7,
+  "spi_miso": 4,
+  "spi_cs": 5,
+  "spi_freq": 1000000,
+  "spi_rst": 22,
   "read_interval_ms": 200,
   "debounce_same_tag_s": 2
 }

@@ -1,0 +1,18 @@
+{
+  "_comment": "Kopiere diese Datei nach config.json und passe deine Werte an",
+  "_comment_mqtt": "MQTT Broker: MakerPi GroundControl auf Raspberry Pi (192.168.3.228:1883)",
+  "_comment_topic": "mqtt_topic_prefix wird als device_id in GroundControl verwendet",
+  "wifi_ssid": "H3CKE_Member",
+  "wifi_password": "einfachmachen",
+  "mqtt_broker": "192.168.3.228",
+  "mqtt_port": 1883,
+  "mqtt_client_id": "picow_nfc_01",
+  "mqtt_topic_prefix": "picow_nfc_01",
+  "mqtt_keepalive_s": 60,
+  "i2c_bus": 0,
+  "i2c_sda": 4,
+  "i2c_scl": 5,
+  "i2c_freq": 100000,
+  "read_interval_ms": 200,
+  "debounce_same_tag_s": 2
+}
