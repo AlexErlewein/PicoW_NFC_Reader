@@ -230,3 +230,17 @@ class MFRC522:
                 buf.append(data[i])
             buf += self._crc(buf)
             (stat, recv, bits) = self._tocard(0x0C, buf)
+        return stat
+
+    def mifare_authenticate(self, uid, block, key=b'\xff\xff\xff\xff\xff\xff', key_type="A"):
+        """PN522-compatible authenticate wrapper for RC522."""
+        mode = self.AUTHENT1A if key_type == "A" else self.AUTHENT1B
+        self.select_tag(list(uid))
+        stat = self.auth(mode, block, list(key), list(uid))
+        return stat == self.OK
+
+    def mifare_write_block(self, block, data):
+        """PN522-compatible write wrapper for RC522."""
+        stat = self.write(block, list(data))
+        self.stop_crypto1()
+        return stat == self.OK

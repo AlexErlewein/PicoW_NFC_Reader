@@ -20,6 +20,8 @@ elif config.RFID_READER_TYPE == "pn522":
 else:
     raise ValueError(f"Unbekannter RFID-Reader-Typ: {config.RFID_READER_TYPE}")
 
+MIFARE_DEFAULT_KEY = b'\xff\xff\xff\xff\xff\xff'
+
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
 led_state = False
@@ -290,6 +292,10 @@ def main():
         print("[FEHLER] MQTT-Verbindung fehlgeschlagen")
         blink(5, 200)
         return
+
+    # Register command handler and subscribe to command topic
+    mqtt.set_command_callback(handle_command)
+    mqtt.subscribe_commands()
 
     # 3. NFC (optional - läuft weiter auch ohne NFC!)
     nfc = setup_nfc()
