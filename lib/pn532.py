@@ -307,8 +307,8 @@ class PN532:
         # Authentication command
         auth_cmd = _MIFARE_CMD_AUTH_A if key_type == "A" else _MIFARE_CMD_AUTH_B
 
-        # Parameters: auth_cmd, block, key (6 bytes), UID (4 bytes)
-        params = bytes([auth_cmd, block]) + key + uid[:4]
+        # Parameters: Tg(0x01), auth_cmd, block, key (6 bytes), UID (4 bytes)
+        params = bytes([0x01, auth_cmd, block]) + key + uid[:4]
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
@@ -325,7 +325,7 @@ class PN532:
         Returns:
             16 bytes of block data
         """
-        params = bytes([_MIFARE_CMD_READ, block])
+        params = bytes([0x01, _MIFARE_CMD_READ, block])
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=17, params=params)
@@ -352,10 +352,35 @@ class PN532:
         if block % 4 == 3:
             raise PN532Error(f"Block {block} is a sector trailer - writing not allowed")
 
-        params = bytes([_MIFARE_CMD_WRITE, block]) + data
+        params = bytes([0x01, _MIFARE_CMD_WRITE, block]) + data
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
             return response[0] == 0x00  # Success
         except PN532Error as e:
             raise PN532Error(f"Failed to write block {block}: {e}")
+
+    # ------------------------------------------------------------------
+    # NTAG / MIFARE Ultralight Read/Write
+    # ------------------------------------------------------------------
+
+    def ntag_write_page(self, page: int, data: bytes) -> bool:
+        """Write 4 bytes to an NTAG or MIFARE Ultralight page.
+
+        Args:
+            page: Page number (user memory starts at page 4 for NTAG213/215/216)
+            data: Exactly 4 bytes to write
+
+        Returns:
+            True if write succeeded
+        """
+        if len(data) != 4:
+            raise PN532Error("NTAG page data must be exactly 4 bytes")
+
+        params = bytes([0x01, 0xA2, page]) + data  # Tg + NTAG WRITE command
+
+        try:
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
+            return response[0] == 0x00
+        except PN532Error as e:
+            raise PN532Error(f"Failed to write NTAG page {page}: {e}")

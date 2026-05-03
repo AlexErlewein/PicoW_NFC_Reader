@@ -24,6 +24,8 @@ _COMMAND_GETFIRMWAREVERSION = 0x02
 _COMMAND_SAMCONFIGURATION = 0x14
 _COMMAND_INLISTPASSIVETARGET = 0x4A
 _COMMAND_INDATAEXCHANGE = 0x40
+_COMMAND_RFCONFIGURATION = 0x32
+_COMMAND_INRELEASE = 0x52
 
 _ACK = b"\x00\x00\xff\x00\xff\x00"
 
@@ -65,6 +67,14 @@ class PN522:
         self._i2c = i2c
         self._addr = address
         self._debug = debug
+        # Wake PN532 and flush stale I2C data from previous unclean disconnect
+        try:
+            self._i2c.writeto(self._addr, b'\x00')
+            time.sleep_ms(50)
+            self._i2c.readfrom(self._addr, 64)
+        except OSError:
+            pass
+        time.sleep_ms(50)
 
     # ------------------------------------------------------------------
     # Low-Level I2C Kommunikation
@@ -232,6 +242,26 @@ class PN522:
         # 0x01 = Normal mode, 0x14 = timeout 50ms * 20 = 1s, 0x01 = IRQ verwenden
         self.call_function(_COMMAND_SAMCONFIGURATION, params=bytes([0x01, 0x14, 0x01]))
 
+    def reset_rf_field(self) -> None:
+        """Release targets and toggle RF field to allow re-detection.
+
+        Two steps are needed:
+        1. InRelease clears the PN532's internal target list
+        2. RF off/on power-cycles the card from any state back to IDLE
+        Without both, InListPassiveTarget cannot re-detect the same card.
+        """
+        try:
+            self.call_function(_COMMAND_INRELEASE, response_length=1, params=bytes([0x00]))
+        except PN522Error:
+            pass
+        try:
+            self.call_function(_COMMAND_RFCONFIGURATION, params=bytes([0x01, 0x00]))
+            time.sleep_ms(100)
+            self.call_function(_COMMAND_RFCONFIGURATION, params=bytes([0x01, 0x01]))
+            time.sleep_ms(100)
+        except PN522Error:
+            pass
+
     def read_passive_target(self, timeout: float = 1.0) -> dict | None:
         """Wartet auf einen NFC-Tag und gibt die UID zurück."""
         try:
@@ -307,8 +337,8 @@ class PN522:
         # Authentication command
         auth_cmd = _MIFARE_CMD_AUTH_A if key_type == "A" else _MIFARE_CMD_AUTH_B
 
-        # Parameters: auth_cmd, block, key (6 bytes), UID (4 bytes)
-        params = bytes([auth_cmd, block]) + key + uid[:4]
+        # Parameters: Tg(0x01), auth_cmd, block, key (6 bytes), UID (4 bytes)
+        params = bytes([0x01, auth_cmd, block]) + key + uid[:4]
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
@@ -325,7 +355,7 @@ class PN522:
         Returns:
             16 bytes of block data
         """
-        params = bytes([_MIFARE_CMD_READ, block])
+        params = bytes([0x01, _MIFARE_CMD_READ, block])
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=17, params=params)
@@ -352,10 +382,37 @@ class PN522:
         if block % 4 == 3:
             raise PN522Error(f"Block {block} is a sector trailer - writing not allowed")
 
-        params = bytes([_MIFARE_CMD_WRITE, block]) + data
+        params = bytes([0x01, _MIFARE_CMD_WRITE, block]) + data
 
         try:
             response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
             return response[0] == 0x00  # Success
         except PN522Error as e:
             raise PN522Error(f"Failed to write block {block}: {e}")
+
+    # ------------------------------------------------------------------
+    # NTAG / MIFARE Ultralight Read/Write
+    # ------------------------------------------------------------------
+
+    def ntag_write_page(self, page: int, data: bytes) -> bool:
+        """Write 4 bytes to an NTAG or MIFARE Ultralight page.
+
+        Args:
+            page: Page number (user memory starts at page 4 for NTAG213/215/216)
+            data: Exactly 4 bytes to write
+
+        Returns:
+            True if write succeeded
+        """
+        if len(data) != 4:
+            raise PN522Error("NTAG page data must be exactly 4 bytes")
+
+        params = bytes([0x01, 0xA2, page]) + data  # Tg + NTAG WRITE command
+
+        try:
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=params)
+            print(f"[NTAG] page {page} response: 0x{response[0]:02X} (len={len(response)})")
+            return response[0] == 0x00
+        except PN522Error as e:
+            print(f"[NTAG] page {page} exception: {e}")
+            raise PN522Error(f"Failed to write NTAG page {page}: {e}")

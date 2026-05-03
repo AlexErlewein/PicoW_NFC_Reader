@@ -179,89 +179,84 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
     - Sector 2: Signature for verification
     """
     uid = tag["uid"]
-    sector = job.get("sector", 1)
     member_id = job.get("member_id", "")
     name = job.get("name", "")
     email = job.get("email", "")
     signature = job.get("signature", "")
     request_id = job.get("request_id", "")
 
-    # Calculate block numbers from sector
-    # Sector 0: blocks 0-3, Sector 1: blocks 4-7, etc.
-    base_block = sector * 4
+    # Detect card type from SAK (0x00 = NTAG/Ultralight, 0x08/0x18 = MIFARE Classic)
+    sak_str = tag.get("sak", "0x08")
+    try:
+        sak_val = int(sak_str, 16) if isinstance(sak_str, str) else int(sak_str)
+    except Exception:
+        sak_val = 0x08
+    is_ntag = (sak_val == 0x00)
+
+    # Prepare data blocks (same layout for both card types, 16 bytes each)
+    header = b"GNDCTRL|"
+    mid_bytes = member_id.encode("utf-8")[:8]
+    block_4 = header + mid_bytes + b"\x00" * (8 - len(mid_bytes))   # 16 bytes
+
+    name_bytes = name.encode("utf-8")[:16]
+    block_5 = name_bytes + b"\x00" * (16 - len(name_bytes))          # 16 bytes
+
+    email_bytes = email.encode("utf-8")[:16]
+    block_6 = email_bytes + b"\x00" * (16 - len(email_bytes))        # 16 bytes
 
     try:
-        # Step 1: Authenticate sector 1 (key A)
-        print(f"[WRITE] Authenticating sector {sector}...")
-        if not nfc.mifare_authenticate(uid, base_block, MIFARE_DEFAULT_KEY, "A"):
-            return {
-                "success": False,
-                "error": f"Authentication failed for sector {sector}",
-                "uid": tag["uid_hex"],
-                "request_id": request_id
-            }
-        print("[WRITE] Authentication successful")
+        if is_ntag:
+            # NTAG/Ultralight: page-based writes, 4 bytes per page, user memory at page 4
+            print(f"[WRITE] NTAG detected (SAK={sak_str}), using page writes...")
+            start_page = 4
+            for chunk_idx, chunk in enumerate([block_4, block_5, block_6]):
+                for i in range(4):
+                    page = start_page + chunk_idx * 4 + i
+                    page_data = chunk[i*4:(i+1)*4]
+                    print(f"[WRITE] Writing NTAG page {page}...")
+                    written = False
+                    for attempt in range(3):
+                        try:
+                            if nfc.ntag_write_page(page, page_data):
+                                written = True
+                                break
+                        except Exception:
+                            pass
+                        print(f"[WRITE] Retry {attempt + 1} for page {page}...")
+                        nfc.reset_rf_field()
+                        nfc.read_passive_target(timeout=0.5)
+                    if not written:
+                        return {"success": False, "error": f"Failed to write NTAG page {page} after 3 attempts", "uid": tag["uid_hex"], "request_id": request_id}
+                    time.sleep_ms(10)  # NTAG EEPROM write time ~5ms
+            print("[WRITE] NTAG write complete")
 
-        # Step 2: Prepare data blocks (each exactly 16 bytes)
-        # Block 4: Magic header + member_id
-        header = b"GNDCTRL|"
-        mid_bytes = member_id.encode("utf-8")[:8]  # Max 8 chars for member_id
-        block_4 = header + mid_bytes.ljust(8, b"\x00")  # Pad to 16 bytes
+        else:
+            # MIFARE Classic: sector-based auth + 16-byte block writes
+            sector = job.get("sector", 1)
+            base_block = sector * 4
+            print(f"[WRITE] MIFARE Classic detected (SAK={sak_str}), authenticating sector {sector}...")
+            if not nfc.mifare_authenticate(uid, base_block, MIFARE_DEFAULT_KEY, "A"):
+                return {"success": False, "error": f"Authentication failed for sector {sector}", "uid": tag["uid_hex"], "request_id": request_id}
+            print("[WRITE] Authentication successful")
 
-        # Block 5: Name (16 bytes)
-        name_bytes = name.encode("utf-8")[:16]
-        block_5 = name_bytes.ljust(16, b"\x00")
+            for block_offset, (label, data) in enumerate([(("member_id", block_4)), ("name", block_5), ("email", block_6)]):
+                block_num = base_block + block_offset
+                print(f"[WRITE] Writing block {block_num} ({label})...")
+                if not nfc.mifare_write_block(block_num, data):
+                    return {"success": False, "error": f"Failed to write block {block_num}", "uid": tag["uid_hex"], "request_id": request_id}
 
-        # Block 6: Email prefix (16 bytes)
-        email_bytes = email.encode("utf-8")[:16]
-        block_6 = email_bytes.ljust(16, b"\x00")
+            # Write signature to sector 2
+            if signature:
+                sig_base = 2 * 4  # Block 8
+                if nfc.mifare_authenticate(uid, sig_base, MIFARE_DEFAULT_KEY, "A"):
+                    sig_raw = signature.encode("utf-8")[:48]
+                    sig_padded = sig_raw + b"\x00" * (48 - len(sig_raw))
+                    for i in range(3):
+                        nfc.mifare_write_block(sig_base + i, sig_padded[i*16:(i+1)*16])
+                    print("[WRITE] Signature written")
 
-        # Step 3: Write blocks
-        print(f"[WRITE] Writing block {base_block} (member_id)...")
-        if not nfc.mifare_write_block(base_block, block_4):
-            return {"success": False, "error": f"Failed to write block {base_block}", "request_id": request_id}
-
-        print(f"[WRITE] Writing block {base_block + 1} (name)...")
-        if not nfc.mifare_write_block(base_block + 1, block_5):
-            return {"success": False, "error": f"Failed to write block {base_block + 1}", "request_id": request_id}
-
-        print(f"[WRITE] Writing block {base_block + 2} (email)...")
-        if not nfc.mifare_write_block(base_block + 2, block_6):
-            return {"success": False, "error": f"Failed to write block {base_block + 2}", "request_id": request_id}
-
-        # Step 4: Write signature to sector 2 if provided
-        if signature:
-            sig_sector = 2
-            sig_base = sig_sector * 4  # Block 8
-
-            print(f"[WRITE] Authenticating sector {sig_sector} for signature...")
-            if nfc.mifare_authenticate(uid, sig_base, MIFARE_DEFAULT_KEY, "A"):
-                # Signature can be up to 48 bytes (3 blocks)
-                sig_bytes = signature.encode("utf-8")[:48]
-                sig_padded = sig_bytes.ljust(48, b"\x00")
-
-                # Write to blocks 8, 9, 10 (sector 2, blocks 0-2)
-                for i in range(3):
-                    block_num = sig_base + i
-                    block_data = sig_padded[i*16:(i+1)*16]
-                    print(f"[WRITE] Writing signature block {block_num}...")
-                    if not nfc.mifare_write_block(block_num, block_data):
-                        print(f"[WRITE] Warning: Failed to write signature block {block_num}")
-                        # Continue anyway - main data was written
-                        break
-                print("[WRITE] Signature written")
-            else:
-                print("[WRITE] Warning: Could not authenticate sector 2 for signature")
-
-        # Success!
-        blink(5, 50)  # Quick blinks = success
-        return {
-            "success": True,
-            "uid": tag["uid_hex"],
-            "sector": sector,
-            "blocks_written": 3,
-            "request_id": request_id
-        }
+        blink(5, 50)
+        return {"success": True, "uid": tag["uid_hex"], "request_id": request_id}
 
     except Exception as e:
         return {"success": False, "error": str(e), "uid": tag.get("uid_hex", ""), "request_id": request_id}
@@ -401,6 +396,12 @@ def main():
                     elif config.RFID_READER_TYPE == "pn522":
                         # PN522 API: read_passive_target() -> tag dict
                         tag = nfc.read_passive_target(timeout=0.5)
+
+                        # Card on reader becomes invisible after first detection
+                        # (ISO14443A ACTIVE state). RF reset forces it back to IDLE.
+                        if tag is None and current_write_job:
+                            nfc.reset_rf_field()
+                            tag = nfc.read_passive_target(timeout=0.5)
 
                 except Exception as e:
                     print(f"[NFC] Lesefehler: {e}")
