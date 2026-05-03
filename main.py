@@ -169,6 +169,53 @@ def setup_nfc() -> RC522 | None:
         return None
 
 
+def read_card_data(nfc: RC522, tag: dict) -> dict | None:
+    """Read GNDCTRL member data from card if present.
+
+    Returns dict with member_id, name, email or None if no data / read error.
+    """
+    sak_str = tag.get("sak", "0x08")
+    try:
+        sak_val = int(sak_str, 16) if isinstance(sak_str, str) else int(sak_str)
+    except Exception:
+        sak_val = 0x08
+    is_ntag = (sak_val == 0x00)
+
+    try:
+        if is_ntag:
+            # NTAG READ (0x30) returns 4 pages (16 bytes) at once
+            data_header = nfc.mifare_read_block(4)   # pages 4-7
+            data_name = nfc.mifare_read_block(8)     # pages 8-11
+            data_email = nfc.mifare_read_block(12)   # pages 12-15
+        else:
+            # MIFARE Classic: authenticate sector 1, read blocks 4-6
+            uid = tag["uid"]
+            if not nfc.mifare_authenticate(uid, 4, MIFARE_DEFAULT_KEY, "A"):
+                return None
+            data_header = nfc.mifare_read_block(4)
+            data_name = nfc.mifare_read_block(5)
+            data_email = nfc.mifare_read_block(6)
+
+        # Check for GNDCTRL magic header
+        if data_header[:8] != b"GNDCTRL|":
+            return None
+
+        member_id = data_header[8:].rstrip(b'\x00').decode('utf-8', 'replace')
+        name = data_name.rstrip(b'\x00').decode('utf-8', 'replace')
+        email = data_email.rstrip(b'\x00').decode('utf-8', 'replace')
+
+        result = {"member_id": member_id}
+        if name:
+            result["name"] = name
+        if email:
+            result["email"] = email
+        return result
+
+    except Exception as e:
+        print(f"[READ] Card data read error: {e}")
+        return None
+
+
 def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
     """Write member data to MIFARE Classic card.
 
@@ -224,10 +271,13 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
                             pass
                         print(f"[WRITE] Retry {attempt + 1} for page {page}...")
                         nfc.reset_rf_field()
-                        nfc.read_passive_target(timeout=0.5)
+                        retry_tag = nfc.read_passive_target(timeout=0.5)
+                        if retry_tag is None:
+                            print("[WRITE] Card lost during retry")
+                            break
                     if not written:
-                        return {"success": False, "error": f"Failed to write NTAG page {page} after 3 attempts", "uid": tag["uid_hex"], "request_id": request_id}
-                    time.sleep_ms(10)  # NTAG EEPROM write time ~5ms
+                        return {"success": False, "error": f"Failed to write NTAG page {page} after retries", "uid": tag["uid_hex"], "request_id": request_id}
+                    time.sleep_ms(20)  # NTAG EEPROM write time ~5ms, extra margin
             print("[WRITE] NTAG write complete")
 
         else:
@@ -400,8 +450,11 @@ def main():
                         # Card on reader becomes invisible after first detection
                         # (ISO14443A ACTIVE state). RF reset forces it back to IDLE.
                         if tag is None and current_write_job:
+                            print("[WRITE] Card not visible, resetting RF field...")
                             nfc.reset_rf_field()
                             tag = nfc.read_passive_target(timeout=0.5)
+                            if tag:
+                                print(f"[WRITE] Re-detected: {tag['uid_hex']}")
 
                 except Exception as e:
                     print(f"[NFC] Lesefehler: {e}")
@@ -442,9 +495,17 @@ def main():
                 if uid == last_uid and (now - last_seen) < config.DEBOUNCE_SAME_TAG_S:
                     continue
 
+                # Read stored member data from card
+                card_data = read_card_data(nfc, tag)
+                if card_data:
+                    print(f"[READ] Card data: {card_data}")
+
                 # Publizieren
                 try:
-                    mqtt.publish_tag(tag, extra={"timestamp": get_timestamp()})
+                    extra = {"timestamp": get_timestamp()}
+                    if card_data:
+                        extra.update(card_data)
+                    mqtt.publish_tag(tag, extra=extra)
                     led.on()
                     time.sleep_ms(50)
                     led.off()
