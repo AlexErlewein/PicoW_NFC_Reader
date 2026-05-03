@@ -7,11 +7,18 @@ import json
 import time
 
 import wifi
-from machine import Pin
+from machine import Pin, I2C
 
 import config
 from lib.mqtt_manager import MQTTError, MQTTManager
-from lib.rc522 import MFRC522 as RC522
+
+# RFID-Treiber basierend auf Konfiguration laden
+if config.RFID_READER_TYPE == "rc522":
+    from lib.rc522 import MFRC522 as RC522
+elif config.RFID_READER_TYPE == "pn522":
+    from lib.pn522 import PN522 as RC522
+else:
+    raise ValueError(f"Unbekannter RFID-Reader-Typ: {config.RFID_READER_TYPE}")
 
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
@@ -96,26 +103,67 @@ def setup_nfc() -> RC522 | None:
     """Initialisiert NFC-Hardware. Gibt None bei Fehler zurück (setzt globale Status-Variablen)."""
     global NFC_STATUS_OK, NFC_ERROR_MSG
 
-    print("[NFC] Initialisiere RC522 (Original-Treiber für Pico W) …")
+    if config.RFID_READER_TYPE == "rc522":
+        print("[NFC] Initialisiere RC522 (SPI) …")
+        try:
+            nfc = RC522(
+                sck=config.SPI_SCK,
+                mosi=config.SPI_MOSI,
+                miso=config.SPI_MISO,
+                rst=config.SPI_RST,
+                cs=config.SPI_CS
+            )
+            print("[NFC] RC522 initialisiert")
+            NFC_STATUS_OK = True
+            NFC_ERROR_MSG = None
+            return nfc
+        except Exception as e:
+            error = f"RC522 Initialisierung fehlgeschlagen: {e}"
+            print(f"[NFC] FEHLER: {error}")
+            NFC_STATUS_OK = False
+            NFC_ERROR_MSG = error
+            return None
 
-    try:
-        # Original-Treiber erwartet Pin-Nummern
-        nfc = RC522(
-            sck=config.SPI_SCK,
-            mosi=config.SPI_MOSI,
-            miso=config.SPI_MISO,
-            rst=config.SPI_RST,
-            cs=config.SPI_CS
-        )
-        print("[NFC] RC522 initialisiert")
-        NFC_STATUS_OK = True
-        NFC_ERROR_MSG = None
-        return nfc
-    except Exception as e:
-        error = f"RC522 Initialisierung fehlgeschlagen: {e}"
-        print(f"[NFC] FEHLER: {error}")
+    elif config.RFID_READER_TYPE == "pn522":
+        print("[NFC] Initialisiere PN522 (I2C) …")
+        try:
+            i2c = I2C(config.I2C_BUS, sda=Pin(config.I2C_SDA), scl=Pin(config.I2C_SCL), freq=config.I2C_FREQ)
+
+            # I2C-Scan zur Fehlersuche
+            print(f"[NFC] Scanne I2C-Bus {config.I2C_BUS}...")
+            devices = i2c.scan()
+            if not devices:
+                print(f"[NFC] FEHLER: Keine I2C-Geräte gefunden. Prüfe Verdrahtung!")
+                print(f"[NFC] SDA: GP{config.I2C_SDA}, SCL: GP{config.I2C_SCL}")
+                NFC_STATUS_OK = False
+                NFC_ERROR_MSG = "Keine I2C-Geräte gefunden"
+                return None
+            else:
+                print(f"[NFC] I2C-Geräte gefunden: {[hex(d) for d in devices]}")
+
+            nfc = RC522(i2c)
+            fw = nfc.get_firmware_version()
+            print(f"[NFC] PN522 Firmware: {fw}")
+
+            # SAM-Konfiguration - wichtig für PN522!
+            print("[NFC] Konfiguriere SAM...")
+            nfc.SAM_configuration()
+
+            print("[NFC] PN522 initialisiert")
+            NFC_STATUS_OK = True
+            NFC_ERROR_MSG = None
+            return nfc
+        except Exception as e:
+            error = f"PN522 Initialisierung fehlgeschlagen: {e}"
+            print(f"[NFC] FEHLER: {error}")
+            NFC_STATUS_OK = False
+            NFC_ERROR_MSG = error
+            return None
+
+    else:
+        print(f"[NFC] Unbekannter Reader-Typ: {config.RFID_READER_TYPE}")
         NFC_STATUS_OK = False
-        NFC_ERROR_MSG = error
+        NFC_ERROR_MSG = f"Unbekannter Reader-Typ: {config.RFID_READER_TYPE}"
         return None
 
 
@@ -321,27 +369,33 @@ def main():
                     current_write_job = None
 
                 try:
-                    # Original-Treiber API: request() -> (stat, bits)
-                    (stat, tag_type) = nfc.request(nfc.REQIDL)
-                    if stat != nfc.OK:
-                        continue
+                    if config.RFID_READER_TYPE == "rc522":
+                        # RC522 API: request() -> (stat, bits)
+                        (stat, tag_type) = nfc.request(nfc.REQIDL)
+                        if stat != nfc.OK:
+                            continue
 
-                    # Anti-Collision
-                    (stat, raw_uid) = nfc.anticoll()
-                    if stat != nfc.OK:
-                        continue
+                        # Anti-Collision
+                        (stat, raw_uid) = nfc.anticoll()
+                        if stat != nfc.OK:
+                            continue
 
-                    uid_hex = "%02x%02x%02x%02x" % (raw_uid[0], raw_uid[1], raw_uid[2], raw_uid[3])
-                    uid_bytes = bytes(raw_uid[:4])
+                        uid_hex = "%02x%02x%02x%02x" % (raw_uid[0], raw_uid[1], raw_uid[2], raw_uid[3])
+                        uid_bytes = bytes(raw_uid[:4])
 
-                    tag = {
-                        "uid": uid_bytes,
-                        "uid_hex": uid_hex.upper(),
-                        "uid_dec": int.from_bytes(uid_bytes, "big"),
-                        "tag_type": "MIFARE Classic",
-                        "atqa": "0x%02x" % tag_type,
-                        "sak": "0x08",
-                    }
+                        tag = {
+                            "uid": uid_bytes,
+                            "uid_hex": uid_hex.upper(),
+                            "uid_dec": int.from_bytes(uid_bytes, "big"),
+                            "tag_type": "MIFARE Classic",
+                            "atqa": "0x%02x" % tag_type,
+                            "sak": "0x08",
+                        }
+
+                    elif config.RFID_READER_TYPE == "pn522":
+                        # PN522 API: read_passive_target() -> tag dict
+                        tag = nfc.read_passive_target(timeout=0.5)
+
                 except Exception as e:
                     print(f"[NFC] Lesefehler: {e}")
                     time.sleep_ms(500)
