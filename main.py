@@ -255,30 +255,78 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
         if is_ntag:
             # NTAG/Ultralight: page-based writes, 4 bytes per page, user memory at page 4
             print(f"[WRITE] NTAG detected (SAK={sak_str}), using page writes...")
+            # MIFARE Ultralight C requires authentication before writes
+            try:
+                nfc.ultralight_c_authenticate()
+                print("[WRITE] Ultralight C authentication successful")
+            except Exception:
+                print("[WRITE] Not Ultralight C or auth not required, proceeding...")
             start_page = 4
+            ntag_success = True
             for chunk_idx, chunk in enumerate([block_4, block_5, block_6]):
+                print(f"[WRITE] Batch {chunk_idx + 1}/3 (pages {start_page + chunk_idx * 4}-{start_page + chunk_idx * 4 + 3})")
                 for i in range(4):
                     page = start_page + chunk_idx * 4 + i
                     page_data = chunk[i*4:(i+1)*4]
                     print(f"[WRITE] Writing NTAG page {page}...")
                     written = False
-                    for attempt in range(3):
+                    for attempt in range(8):
                         try:
                             if nfc.ntag_write_page(page, page_data):
                                 written = True
                                 break
+                            # Error response — wait and retry
+                            print(f"[WRITE] Retry {attempt + 1} for page {page}...")
+                            if attempt < 4:
+                                time.sleep_ms(300)
+                            else:
+                                # Persistent failure: re-detect card to reset comms
+                                print("[WRITE] Re-detecting card...")
+                                time.sleep_ms(1000)
+                                retry_tag = nfc.read_passive_target(timeout=1.0)
+                                if retry_tag is None:
+                                    print("[WRITE] Card lost during retry")
+                                    break
+                                time.sleep_ms(1000)  # Stabilize after re-select
                         except Exception:
-                            pass
-                        print(f"[WRITE] Retry {attempt + 1} for page {page}...")
-                        nfc.reset_rf_field()
-                        retry_tag = nfc.read_passive_target(timeout=0.5)
-                        if retry_tag is None:
-                            print("[WRITE] Card lost during retry")
-                            break
+                            # Comms failure — re-detect
+                            print(f"[WRITE] Retry {attempt + 1} for page {page} (re-detecting)...")
+                            time.sleep_ms(1000)
+                            retry_tag = nfc.read_passive_target(timeout=1.0)
+                            if retry_tag is None:
+                                print("[WRITE] Card lost during retry")
+                                break
+                            time.sleep_ms(1000)  # Stabilize after re-select
                     if not written:
-                        return {"success": False, "error": f"Failed to write NTAG page {page} after retries", "uid": tag["uid_hex"], "request_id": request_id}
-                    time.sleep_ms(20)  # NTAG EEPROM write time ~5ms, extra margin
-            print("[WRITE] NTAG write complete")
+                        ntag_success = False
+                        print(f"[WRITE] NTAG write failed on page {page}, trying MIFARE Classic fallback...")
+                        break
+                    time.sleep_ms(100)  # NTAG EEPROM write time + RF recovery
+                if not ntag_success:
+                    break
+                # Long recovery between batches to let card power supply recharge
+                if chunk_idx < 2:
+                    print(f"[WRITE] Recovery pause ({chunk_idx + 1}/3)...")
+                    time.sleep_ms(2000)
+
+            if ntag_success:
+                print("[WRITE] NTAG write complete")
+            else:
+                print("[WRITE] NTAG write failed, falling back to MIFARE Classic block writes...")
+                # Try MIFARE Classic write as fallback
+                sector = job.get("sector", 1)
+                base_block = sector * 4
+                print(f"[WRITE] Authenticating sector {sector}...")
+                if not nfc.mifare_authenticate(uid, base_block, MIFARE_DEFAULT_KEY, "A"):
+                    return {"success": False, "error": f"Fallback: Authentication failed for sector {sector}", "uid": tag["uid_hex"], "request_id": request_id}
+                print("[WRITE] Authentication successful")
+                if not nfc.mifare_write_block(base_block, block_4):
+                    return {"success": False, "error": f"Fallback: Failed to write block {base_block}", "uid": tag["uid_hex"], "request_id": request_id}
+                if not nfc.mifare_write_block(base_block + 1, block_5):
+                    return {"success": False, "error": f"Fallback: Failed to write block {base_block + 1}", "uid": tag["uid_hex"], "request_id": request_id}
+                if not nfc.mifare_write_block(base_block + 2, block_6):
+                    return {"success": False, "error": f"Fallback: Failed to write block {base_block + 2}", "uid": tag["uid_hex"], "request_id": request_id}
+                print("[WRITE] MIFARE Classic fallback write complete")
 
         else:
             # MIFARE Classic: sector-based auth + 16-byte block writes
@@ -447,12 +495,12 @@ def main():
                         # PN522 API: read_passive_target() -> tag dict
                         tag = nfc.read_passive_target(timeout=0.5)
 
-                        # Card on reader becomes invisible after first detection
-                        # (ISO14443A ACTIVE state). RF reset forces it back to IDLE.
+                        # If write job pending and no card detected, wait and retry
+                        # (card may be in ACTIVE state from previous read_card_data)
                         if tag is None and current_write_job:
-                            print("[WRITE] Card not visible, resetting RF field...")
-                            nfc.reset_rf_field()
-                            tag = nfc.read_passive_target(timeout=0.5)
+                            print("[WRITE] Card not visible, waiting for watchdog...")
+                            time.sleep_ms(1000)
+                            tag = nfc.read_passive_target(timeout=1.0)
                             if tag:
                                 print(f"[WRITE] Re-detected: {tag['uid_hex']}")
 

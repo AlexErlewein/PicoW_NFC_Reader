@@ -242,25 +242,53 @@ class PN522:
         # 0x01 = Normal mode, 0x14 = timeout 50ms * 20 = 1s, 0x01 = IRQ verwenden
         self.call_function(_COMMAND_SAMCONFIGURATION, params=bytes([0x01, 0x14, 0x01]))
 
-    def reset_rf_field(self) -> None:
-        """Release targets and toggle RF field to allow re-detection.
+    def release_targets(self) -> None:
+        """Release all targets from PN532's internal list.
 
-        Two steps are needed:
-        1. InRelease clears the PN532's internal target list
-        2. RF off/on power-cycles the card from any state back to IDLE
-        Without both, InListPassiveTarget cannot re-detect the same card.
+        After release + brief delay, NTAG/Ultralight cards reset via
+        internal watchdog (~5ms) and become re-detectable without RF toggle.
+        MIFARE Classic has no watchdog and needs power_cycle_rf() instead.
         """
         try:
             self.call_function(_COMMAND_INRELEASE, response_length=1, params=bytes([0x00]))
         except PN522Error:
             pass
+        time.sleep_ms(100)
+
+    def power_cycle_rf(self) -> None:
+        """Power down PN532 to force RF field off, then wake and reconfigure.
+
+        PowerDown (0x16) is guaranteed to stop the RF oscillator,
+        unlike RFConfiguration which some boards don't route to the antenna.
+        """
+        # PowerDown with I2C wakeup source (bit 5)
         try:
-            self.call_function(_COMMAND_RFCONFIGURATION, params=bytes([0x01, 0x00]))
-            time.sleep_ms(100)
-            self.call_function(_COMMAND_RFCONFIGURATION, params=bytes([0x01, 0x01]))
-            time.sleep_ms(100)
+            self.call_function(0x16, params=bytes([0x20]))
         except PN522Error:
             pass
+        time.sleep_ms(300)
+        # Wake PN532 via I2C
+        try:
+            self._i2c.writeto(self._addr, b'\x00')
+        except OSError:
+            pass
+        time.sleep_ms(100)
+        # Flush any stale data
+        try:
+            self._i2c.readfrom(self._addr, 64)
+        except OSError:
+            pass
+        time.sleep_ms(50)
+        # Re-enable SAM (needed after PowerDown reset)
+        try:
+            self.SAM_configuration()
+        except PN522Error:
+            pass
+
+    def reset_rf_field(self) -> None:
+        """Full reset: release targets + RF power cycle."""
+        self.release_targets()
+        self.power_cycle_rf()
 
     def read_passive_target(self, timeout: float = 1.0) -> dict | None:
         """Wartet auf einen NFC-Tag und gibt die UID zurück."""
@@ -393,6 +421,20 @@ class PN522:
     # ------------------------------------------------------------------
     # NTAG / MIFARE Ultralight Read/Write
     # ------------------------------------------------------------------
+
+    def ultralight_c_authenticate(self) -> bool:
+        """Authenticate MIFARE Ultralight C card.
+
+        Ultralight C requires 3DES authentication before write operations.
+        Returns True if authentication succeeds.
+        """
+        try:
+            # Send AUTH command (0x1A) with no parameters (uses default key)
+            response = self.call_function(_COMMAND_INDATAEXCHANGE, response_length=1, params=bytes([0x01, 0x1A]))
+            return response[0] == 0x00
+        except PN522Error:
+            # Not Ultralight C or auth failed
+            return False
 
     def ntag_write_page(self, page: int, data: bytes) -> bool:
         """Write 4 bytes to an NTAG or MIFARE Ultralight page.
