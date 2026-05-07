@@ -209,6 +209,34 @@ def read_card_data(nfc: RC522, tag: dict) -> dict | None:
             result["name"] = name
         if email:
             result["email"] = email
+
+        # Read signature
+        try:
+            if is_ntag:
+                # Pages 16-27: 3 reads × 16 bytes = 48 bytes
+                sig_bytes = b""
+                for page_start in [16, 20, 24]:
+                    d = nfc.mifare_read_block(page_start)
+                    if d:
+                        sig_bytes += bytes(d)
+                sig_str = sig_bytes.rstrip(b'\x00').decode('utf-8', 'replace')
+                if sig_str:
+                    result["signature"] = sig_str
+            else:
+                # Sector 2, blocks 8-10: 3 × 16 bytes = 48 bytes
+                uid = tag["uid"]
+                if nfc.mifare_authenticate(uid, 8, MIFARE_DEFAULT_KEY, "A"):
+                    sig_bytes = b""
+                    for blk in [8, 9, 10]:
+                        d = nfc.mifare_read_block(blk)
+                        if d:
+                            sig_bytes += bytes(d)
+                    sig_str = sig_bytes.rstrip(b'\x00').decode('utf-8', 'replace')
+                    if sig_str:
+                        result["signature"] = sig_str
+        except Exception:
+            pass  # Signature read failure is non-fatal
+
         return result
 
     except Exception as e:
@@ -311,6 +339,14 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
 
             if ntag_success:
                 print("[WRITE] NTAG write complete")
+                # Write signature to pages 16-27 (48 bytes)
+                if signature:
+                    print("[WRITE] Writing signature to pages 16-27...")
+                    sig_raw = signature.encode("utf-8")[:48]
+                    sig_padded = sig_raw + b"\x00" * (48 - len(sig_raw))
+                    for i in range(12):
+                        nfc.ntag_write_page(16 + i, sig_padded[i * 4:(i + 1) * 4])
+                    print("[WRITE] Signature written")
             else:
                 print("[WRITE] NTAG write failed, falling back to MIFARE Classic block writes...")
                 # Try MIFARE Classic write as fallback
@@ -469,27 +505,7 @@ def main():
 
                 try:
                     if config.RFID_READER_TYPE == "rc522":
-                        # RC522 API: request() -> (stat, bits)
-                        (stat, tag_type) = nfc.request(nfc.REQIDL)
-                        if stat != nfc.OK:
-                            continue
-
-                        # Anti-Collision
-                        (stat, raw_uid) = nfc.anticoll()
-                        if stat != nfc.OK:
-                            continue
-
-                        uid_hex = "%02x%02x%02x%02x" % (raw_uid[0], raw_uid[1], raw_uid[2], raw_uid[3])
-                        uid_bytes = bytes(raw_uid[:4])
-
-                        tag = {
-                            "uid": uid_bytes,
-                            "uid_hex": uid_hex.upper(),
-                            "uid_dec": int.from_bytes(uid_bytes, "big"),
-                            "tag_type": "MIFARE Classic",
-                            "atqa": "0x%02x" % tag_type,
-                            "sak": "0x08",
-                        }
+                        tag = nfc.read_tag()
 
                     elif config.RFID_READER_TYPE == "pn522":
                         # PN522 API: read_passive_target() -> tag dict

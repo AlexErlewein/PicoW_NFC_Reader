@@ -196,12 +196,206 @@ class MFRC522:
 
         return stat, recv
 
-    def select_tag(self, ser):
+    def anticoll2(self):
+        """Cascade level 2 for 7-byte UIDs (MIFARE Classic 1K/4K)."""
+        ser_chk = 0
+        ser = [0x95, 0x20]
 
-        buf = [0x93, 0x70] + ser[:5]
+        self._wreg(0x0D, 0x00)
+        (stat, recv, bits) = self._tocard(0x0C, ser)
+
+        if stat == self.OK:
+            if len(recv) == 5:
+                for i in range(4):
+                    ser_chk = ser_chk ^ recv[i]
+                if ser_chk != recv[4]:
+                    stat = self.ERR
+            else:
+                stat = self.ERR
+
+        return stat, recv
+
+    def _select_tag_raw(self, anticoll_cmd, ser):
+        """Select tag using raw 5-byte anticoll response. Returns (stat, sak)."""
+        buf = [anticoll_cmd, 0x70] + list(ser[:5])
         buf += self._crc(buf)
         (stat, recv, bits) = self._tocard(0x0C, buf)
-        return self.OK if (stat == self.OK) and (bits == 0x18) else self.ERR
+        sak = recv[0] if (stat == self.OK and recv) else 0
+        return (self.OK if (stat == self.OK and bits == 0x18) else self.ERR), sak
+
+    def select_tag(self, ser):
+        stat, _ = self._select_tag_raw(0x93, ser)
+        return stat
+
+    def select_tag2(self, ser):
+        """Select tag at cascade level 2."""
+        stat, _ = self._select_tag_raw(0x95, ser)
+        return stat
+
+    def get_uid(self):
+        """Read full UID (supports 4, 7, and 10 byte UIDs via cascade levels)."""
+        uid = []
+
+        # Cascade level 1
+        self._wreg(0x0D, 0x00)
+        (stat, recv) = self.anticoll()
+        if stat != self.OK:
+            return None
+
+        if recv[0] == 0x88:  # Cascade tag byte — not part of UID
+            uid.extend(recv[1:4])  # 3 actual UID bytes from level 1
+            self.select_tag(recv[:5])  # Advance card to level 2
+
+            # Cascade level 2
+            (stat2, recv2) = self.anticoll2()
+            if stat2 != self.OK:
+                return None
+
+            if recv2[0] == 0x88:  # Still cascading — 10-byte UID
+                uid.extend(recv2[1:4])
+                self.select_tag2(recv2[:5])
+
+                # Cascade level 3
+                self._wreg(0x0D, 0x00)
+                (stat3, recv3, _) = self._tocard(0x0C, [0x97, 0x20])
+                if stat3 != self.OK or len(recv3) < 5:
+                    return None
+                uid.extend(recv3[0:4])
+            else:
+                uid.extend(recv2[0:4])  # 4 bytes → 7-byte UID total
+        else:
+            uid.extend(recv[0:4])  # Standard 4-byte UID
+
+        return bytes(uid)
+
+    def get_atqa(self):
+        """Read ATQA bytes from card."""
+        self._wreg(0x0D, 0x07)
+        (stat, recv, bits) = self._tocard(0x0C, [self.REQIDL])
+        if stat != self.OK:
+            return None
+        # ATQA is 2 bytes in recv buffer
+        if len(recv) >= 2:
+            return (recv[0] << 8) | recv[1]
+        # Fallback: use bits value if recv is empty
+        return bits
+
+    def get_sak(self):
+        """Read SAK byte after selecting tag."""
+        uid = self.get_uid()
+        if uid is None:
+            return None
+
+        # Select tag to get SAK
+        if len(uid) <= 4:
+            stat = self.select_tag(list(uid))
+        else:
+            # For multi-level UIDs, select at level 1 first
+            stat = self.select_tag(list(uid[:4]))
+            if stat != self.OK:
+                return None
+
+        if stat != self.OK:
+            return None
+
+        # Read SAK from register
+        sak = self._rreg(0x05)
+        return sak
+
+    def read_tag(self):
+        """Read complete tag information including UID, ATQA, SAK with cascade support."""
+        # REQA to detect card and read ATQA
+        self._wreg(0x0D, 0x07)
+        (stat, recv, bits) = self._tocard(0x0C, [self.REQIDL])
+        if stat != self.OK:
+            return None
+
+        # ATQA: MFRC522 delivers LSByte first
+        atqa = (recv[0] | (recv[1] << 8)) if len(recv) >= 2 else bits
+
+        # Level 1 anticoll
+        self._wreg(0x0D, 0x00)
+        (stat, recv1, _) = self._tocard(0x0C, [0x93, 0x20])
+        if stat != self.OK or len(recv1) < 5:
+            return None
+
+        uid = []
+
+        if recv1[0] == 0x88:  # 7- or 10-byte UID
+            stat, _ = self._select_tag_raw(0x93, recv1[:5])
+            if stat != self.OK:
+                return None
+            uid.extend(recv1[1:4])
+
+            # Level 2 anticoll
+            self._wreg(0x0D, 0x00)
+            (stat, recv2, _) = self._tocard(0x0C, [0x95, 0x20])
+            if stat != self.OK or len(recv2) < 5:
+                return None
+
+            if recv2[0] == 0x88:  # 10-byte UID
+                stat, _ = self._select_tag_raw(0x95, recv2[:5])
+                if stat != self.OK:
+                    return None
+                uid.extend(recv2[1:4])
+
+                # Level 3 anticoll
+                self._wreg(0x0D, 0x00)
+                (stat, recv3, _) = self._tocard(0x0C, [0x97, 0x20])
+                if stat != self.OK or len(recv3) < 5:
+                    return None
+                stat, sak = self._select_tag_raw(0x97, recv3[:5])
+                if stat != self.OK:
+                    return None
+                uid.extend(recv3[0:4])
+            else:
+                stat, sak = self._select_tag_raw(0x95, recv2[:5])
+                if stat != self.OK:
+                    return None
+                uid.extend(recv2[0:4])
+        else:
+            stat, sak = self._select_tag_raw(0x93, recv1[:5])
+            if stat != self.OK:
+                return None
+            uid.extend(recv1[0:4])
+
+        uid_bytes = bytes(uid)
+        tag_type = self._determine_tag_type(sak, atqa)
+
+        return {
+            "uid": uid_bytes,
+            "uid_hex": uid_bytes.hex().upper(),
+            "uid_dec": int.from_bytes(uid_bytes, "big"),
+            "atqa": f"0x{atqa:04X}",
+            "sak": f"0x{sak:02X}",
+            "tag_type": tag_type,
+        }
+
+    def _determine_tag_type(self, sak, atqa):
+        """Determine tag type from SAK and ATQA bytes."""
+        # Based on NXP MIFARE tag identification
+        if sak == 0x00:
+            if atqa == 0x0044:
+                return "MIFARE Classic 1K"
+            elif atqa == 0x0042:
+                return "MIFARE Classic 4K"
+            else:
+                return "MIFARE Ultralight/NTAG"
+        elif sak == 0x08:
+            if atqa == 0x0004:
+                return "MIFARE Classic 1K"
+            elif atqa == 0x0002:
+                return "MIFARE Classic 4K"
+            else:
+                return "MIFARE Classic"
+        elif sak == 0x09:
+            return "MIFARE Classic Mini"
+        elif sak == 0x18:
+            return "MIFARE Classic 4K"
+        elif sak == 0x20:
+            return "MIFARE DESFire"
+        else:
+            return f"Unknown (SAK=0x{sak:02X}, ATQA=0x{atqa:04X})"
 
     def auth(self, mode, addr, sect, ser):
         return self._tocard(0x0E, [mode, addr] + sect + ser[:4])[0]
@@ -239,8 +433,24 @@ class MFRC522:
         stat = self.auth(mode, block, list(key), list(uid))
         return stat == self.OK
 
+    def mifare_read_block(self, block):
+        """PN522-compatible read wrapper: read 16 bytes from block/page address."""
+        data = self.read(block)
+        return bytes(data) if data is not None else None
+
     def mifare_write_block(self, block, data):
         """PN522-compatible write wrapper for RC522."""
         stat = self.write(block, list(data))
         self.stop_crypto1()
         return stat == self.OK
+
+    def ntag_write_page(self, page, data):
+        """Write 4 bytes to an NTAG/Ultralight page using command 0xA2."""
+        buf = [0xA2, page] + list(data[:4])
+        buf += self._crc(buf)
+        (stat, recv, bits) = self._tocard(0x0C, buf)
+        return stat == self.OK and bits == 4 and bool(recv) and (recv[0] & 0x0F) == 0x0A
+
+    def read_passive_target(self, timeout=0.5):
+        """PN522-compatible wrapper: detect and read tag."""
+        return self.read_tag()
