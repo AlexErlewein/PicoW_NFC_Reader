@@ -507,6 +507,16 @@ def main():
                     if config.RFID_READER_TYPE == "rc522":
                         tag = nfc.read_tag()
 
+                        # RC522 uses REQIDL — a card briefly in ACTIVE state after
+                        # the previous read won't respond. One retry after a short
+                        # pause is enough for it to fall back to IDLE.
+                        if tag is None and current_write_job:
+                            print("[WRITE] Card not visible, retrying for RC522...")
+                            time.sleep_ms(500)
+                            tag = nfc.read_tag()
+                            if tag:
+                                print(f"[WRITE] Re-detected: {tag['uid_hex']}")
+
                     elif config.RFID_READER_TYPE == "pn522":
                         # PN522 API: read_passive_target() -> tag dict
                         tag = nfc.read_passive_target(timeout=0.5)

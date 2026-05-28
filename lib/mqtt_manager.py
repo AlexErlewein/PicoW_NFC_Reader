@@ -28,6 +28,7 @@ class MQTTManager:
         self._topic_prefix = topic_prefix
         self._keepalive = keepalive
         self._client: _MQTTClient | None = None
+        self._command_callback = None  # Stored so reconnects can restore it
 
     def connect(self, retries: int = 5) -> bool:
         """Verbindet mit dem MQTT Broker. Gibt True bei Erfolg zurück."""
@@ -42,6 +43,12 @@ class MQTTManager:
                 client.connect()  # pyright: ignore[reportOptionalMemberAccess]
                 self._client = client
                 print(f"[MQTT] Verbunden mit {self._broker}:{self._port}")
+
+                # Restore callback and subscription on every connect (including reconnects)
+                if self._command_callback:
+                    self._client.set_callback(self._command_callback)
+                    self._client.subscribe(f"{self._topic_prefix}/command")
+                    print(f"[MQTT] Command subscription restored: {self._topic_prefix}/command")
 
                 # Sende Status-Message für GroundControl Dashboard
                 self.publish_status("online")
@@ -127,6 +134,7 @@ class MQTTManager:
         """Setzt einen Callback für eingehende Commands."""
         if self._client is None:
             raise MQTTError("Nicht verbunden")
+        self._command_callback = callback
         self._client.set_callback(callback)
 
     def subscribe_commands(self):
