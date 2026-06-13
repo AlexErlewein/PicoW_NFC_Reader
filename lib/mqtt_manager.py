@@ -76,7 +76,13 @@ class MQTTManager:
             self._client = None
             raise MQTTError(str(e))
 
-    def publish_heartbeat(self, nfc_ok: bool, nfc_error: str | None = None, uptime: int = 0):
+    def publish_heartbeat(
+        self,
+        nfc_ok: bool,
+        nfc_error: str | None = None,
+        uptime: int = 0,
+        requires_permission: bool = True,
+    ):
         """
         Publiziert einen Heartbeat mit Systemstatus.
         Wird vom GroundControl Dashboard zur Geräteeinordnung genutzt.
@@ -88,7 +94,8 @@ class MQTTManager:
             "status": "online",
             "nfc_ok": nfc_ok,
             "uptime": uptime,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "requires_permission": requires_permission,
         }
         if nfc_error:
             payload["nfc_error"] = nfc_error

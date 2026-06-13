@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../MakerPi_GroundControl"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../ESP_Dial"
+		},
+		{
+			"path": "../H3ckeApp"
+		}
+	],
+	"settings": {}
+}

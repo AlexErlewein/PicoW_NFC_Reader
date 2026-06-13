@@ -7,7 +7,7 @@ import json
 import time
 
 import wifi
-from machine import Pin, I2C
+from machine import I2C, Pin
 
 import config
 from lib.mqtt_manager import MQTTError, MQTTManager
@@ -20,7 +20,7 @@ elif config.RFID_READER_TYPE == "pn522":
 else:
     raise ValueError(f"Unbekannter RFID-Reader-Typ: {config.RFID_READER_TYPE}")
 
-MIFARE_DEFAULT_KEY = b'\xff\xff\xff\xff\xff\xff'
+MIFARE_DEFAULT_KEY = b"\xff\xff\xff\xff\xff\xff"
 
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
@@ -80,7 +80,7 @@ def handle_command(topic: bytes, msg: bytes):
                 "signature": cmd.get("signature", ""),
                 "sector": cmd.get("sector", 1),  # Default sector 1
                 "timeout": time.time() + WRITE_TIMEOUT_S,
-                "request_id": cmd.get("request_id", "")
+                "request_id": cmd.get("request_id", ""),
             }
             print(f"[WRITE] Job stored, waiting for card (timeout: {WRITE_TIMEOUT_S}s)")
 
@@ -113,7 +113,7 @@ def setup_nfc() -> RC522 | None:
                 mosi=config.SPI_MOSI,
                 miso=config.SPI_MISO,
                 rst=config.SPI_RST,
-                cs=config.SPI_CS
+                cs=config.SPI_CS,
             )
             print("[NFC] RC522 initialisiert")
             NFC_STATUS_OK = True
@@ -129,13 +129,18 @@ def setup_nfc() -> RC522 | None:
     elif config.RFID_READER_TYPE == "pn522":
         print("[NFC] Initialisiere PN522 (I2C) …")
         try:
-            i2c = I2C(config.I2C_BUS, sda=Pin(config.I2C_SDA), scl=Pin(config.I2C_SCL), freq=config.I2C_FREQ)
+            i2c = I2C(
+                config.I2C_BUS,
+                sda=Pin(config.I2C_SDA),
+                scl=Pin(config.I2C_SCL),
+                freq=config.I2C_FREQ,
+            )
 
             # I2C-Scan zur Fehlersuche
             print(f"[NFC] Scanne I2C-Bus {config.I2C_BUS}...")
             devices = i2c.scan()
             if not devices:
-                print(f"[NFC] FEHLER: Keine I2C-Geräte gefunden. Prüfe Verdrahtung!")
+                print("[NFC] FEHLER: Keine I2C-Geräte gefunden. Prüfe Verdrahtung!")
                 print(f"[NFC] SDA: GP{config.I2C_SDA}, SCL: GP{config.I2C_SCL}")
                 NFC_STATUS_OK = False
                 NFC_ERROR_MSG = "Keine I2C-Geräte gefunden"
@@ -179,14 +184,14 @@ def read_card_data(nfc: RC522, tag: dict) -> dict | None:
         sak_val = int(sak_str, 16) if isinstance(sak_str, str) else int(sak_str)
     except Exception:
         sak_val = 0x08
-    is_ntag = (sak_val == 0x00)
+    is_ntag = sak_val == 0x00
 
     try:
         if is_ntag:
             # NTAG READ (0x30) returns 4 pages (16 bytes) at once
-            data_header = nfc.mifare_read_block(4)   # pages 4-7
-            data_name = nfc.mifare_read_block(8)     # pages 8-11
-            data_email = nfc.mifare_read_block(12)   # pages 12-15
+            data_header = nfc.mifare_read_block(4)  # pages 4-7
+            data_name = nfc.mifare_read_block(8)  # pages 8-11
+            data_email = nfc.mifare_read_block(12)  # pages 12-15
         else:
             # MIFARE Classic: authenticate sector 1, read blocks 4-6
             uid = tag["uid"]
@@ -200,9 +205,9 @@ def read_card_data(nfc: RC522, tag: dict) -> dict | None:
         if data_header[:8] != b"GNDCTRL|":
             return None
 
-        member_id = data_header[8:].rstrip(b'\x00').decode('utf-8', 'replace')
-        name = data_name.rstrip(b'\x00').decode('utf-8', 'replace')
-        email = data_email.rstrip(b'\x00').decode('utf-8', 'replace')
+        member_id = data_header[8:].rstrip(b"\x00").decode("utf-8", "replace")
+        name = data_name.rstrip(b"\x00").decode("utf-8", "replace")
+        email = data_email.rstrip(b"\x00").decode("utf-8", "replace")
 
         result = {"member_id": member_id}
         if name:
@@ -219,7 +224,7 @@ def read_card_data(nfc: RC522, tag: dict) -> dict | None:
                     d = nfc.mifare_read_block(page_start)
                     if d:
                         sig_bytes += bytes(d)
-                sig_str = sig_bytes.rstrip(b'\x00').decode('utf-8', 'replace')
+                sig_str = sig_bytes.rstrip(b"\x00").decode("utf-8", "replace")
                 if sig_str:
                     result["signature"] = sig_str
             else:
@@ -231,7 +236,7 @@ def read_card_data(nfc: RC522, tag: dict) -> dict | None:
                         d = nfc.mifare_read_block(blk)
                         if d:
                             sig_bytes += bytes(d)
-                    sig_str = sig_bytes.rstrip(b'\x00').decode('utf-8', 'replace')
+                    sig_str = sig_bytes.rstrip(b"\x00").decode("utf-8", "replace")
                     if sig_str:
                         result["signature"] = sig_str
         except Exception:
@@ -266,18 +271,18 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
         sak_val = int(sak_str, 16) if isinstance(sak_str, str) else int(sak_str)
     except Exception:
         sak_val = 0x08
-    is_ntag = (sak_val == 0x00)
+    is_ntag = sak_val == 0x00
 
     # Prepare data blocks (same layout for both card types, 16 bytes each)
     header = b"GNDCTRL|"
     mid_bytes = member_id.encode("utf-8")[:8]
-    block_4 = header + mid_bytes + b"\x00" * (8 - len(mid_bytes))   # 16 bytes
+    block_4 = header + mid_bytes + b"\x00" * (8 - len(mid_bytes))  # 16 bytes
 
     name_bytes = name.encode("utf-8")[:16]
-    block_5 = name_bytes + b"\x00" * (16 - len(name_bytes))          # 16 bytes
+    block_5 = name_bytes + b"\x00" * (16 - len(name_bytes))  # 16 bytes
 
     email_bytes = email.encode("utf-8")[:16]
-    block_6 = email_bytes + b"\x00" * (16 - len(email_bytes))        # 16 bytes
+    block_6 = email_bytes + b"\x00" * (16 - len(email_bytes))  # 16 bytes
 
     try:
         if is_ntag:
@@ -292,10 +297,12 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
             start_page = 4
             ntag_success = True
             for chunk_idx, chunk in enumerate([block_4, block_5, block_6]):
-                print(f"[WRITE] Batch {chunk_idx + 1}/3 (pages {start_page + chunk_idx * 4}-{start_page + chunk_idx * 4 + 3})")
+                print(
+                    f"[WRITE] Batch {chunk_idx + 1}/3 (pages {start_page + chunk_idx * 4}-{start_page + chunk_idx * 4 + 3})"
+                )
                 for i in range(4):
                     page = start_page + chunk_idx * 4 + i
-                    page_data = chunk[i*4:(i+1)*4]
+                    page_data = chunk[i * 4 : (i + 1) * 4]
                     print(f"[WRITE] Writing NTAG page {page}...")
                     written = False
                     for attempt in range(8):
@@ -327,7 +334,9 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
                             time.sleep_ms(1000)  # Stabilize after re-select
                     if not written:
                         ntag_success = False
-                        print(f"[WRITE] NTAG write failed on page {page}, trying MIFARE Classic fallback...")
+                        print(
+                            f"[WRITE] NTAG write failed on page {page}, trying MIFARE Classic fallback..."
+                        )
                         break
                     time.sleep_ms(100)  # NTAG EEPROM write time + RF recovery
                 if not ntag_success:
@@ -345,7 +354,7 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
                     sig_raw = signature.encode("utf-8")[:48]
                     sig_padded = sig_raw + b"\x00" * (48 - len(sig_raw))
                     for i in range(12):
-                        nfc.ntag_write_page(16 + i, sig_padded[i * 4:(i + 1) * 4])
+                        nfc.ntag_write_page(16 + i, sig_padded[i * 4 : (i + 1) * 4])
                     print("[WRITE] Signature written")
             else:
                 print("[WRITE] NTAG write failed, falling back to MIFARE Classic block writes...")
@@ -354,30 +363,64 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
                 base_block = sector * 4
                 print(f"[WRITE] Authenticating sector {sector}...")
                 if not nfc.mifare_authenticate(uid, base_block, MIFARE_DEFAULT_KEY, "A"):
-                    return {"success": False, "error": f"Fallback: Authentication failed for sector {sector}", "uid": tag["uid_hex"], "request_id": request_id}
+                    return {
+                        "success": False,
+                        "error": f"Fallback: Authentication failed for sector {sector}",
+                        "uid": tag["uid_hex"],
+                        "request_id": request_id,
+                    }
                 print("[WRITE] Authentication successful")
                 if not nfc.mifare_write_block(base_block, block_4):
-                    return {"success": False, "error": f"Fallback: Failed to write block {base_block}", "uid": tag["uid_hex"], "request_id": request_id}
+                    return {
+                        "success": False,
+                        "error": f"Fallback: Failed to write block {base_block}",
+                        "uid": tag["uid_hex"],
+                        "request_id": request_id,
+                    }
                 if not nfc.mifare_write_block(base_block + 1, block_5):
-                    return {"success": False, "error": f"Fallback: Failed to write block {base_block + 1}", "uid": tag["uid_hex"], "request_id": request_id}
+                    return {
+                        "success": False,
+                        "error": f"Fallback: Failed to write block {base_block + 1}",
+                        "uid": tag["uid_hex"],
+                        "request_id": request_id,
+                    }
                 if not nfc.mifare_write_block(base_block + 2, block_6):
-                    return {"success": False, "error": f"Fallback: Failed to write block {base_block + 2}", "uid": tag["uid_hex"], "request_id": request_id}
+                    return {
+                        "success": False,
+                        "error": f"Fallback: Failed to write block {base_block + 2}",
+                        "uid": tag["uid_hex"],
+                        "request_id": request_id,
+                    }
                 print("[WRITE] MIFARE Classic fallback write complete")
 
         else:
             # MIFARE Classic: sector-based auth + 16-byte block writes
             sector = job.get("sector", 1)
             base_block = sector * 4
-            print(f"[WRITE] MIFARE Classic detected (SAK={sak_str}), authenticating sector {sector}...")
+            print(
+                f"[WRITE] MIFARE Classic detected (SAK={sak_str}), authenticating sector {sector}..."
+            )
             if not nfc.mifare_authenticate(uid, base_block, MIFARE_DEFAULT_KEY, "A"):
-                return {"success": False, "error": f"Authentication failed for sector {sector}", "uid": tag["uid_hex"], "request_id": request_id}
+                return {
+                    "success": False,
+                    "error": f"Authentication failed for sector {sector}",
+                    "uid": tag["uid_hex"],
+                    "request_id": request_id,
+                }
             print("[WRITE] Authentication successful")
 
-            for block_offset, (label, data) in enumerate([(("member_id", block_4)), ("name", block_5), ("email", block_6)]):
+            for block_offset, (label, data) in enumerate(
+                [(("member_id", block_4)), ("name", block_5), ("email", block_6)]
+            ):
                 block_num = base_block + block_offset
                 print(f"[WRITE] Writing block {block_num} ({label})...")
                 if not nfc.mifare_write_block(block_num, data):
-                    return {"success": False, "error": f"Failed to write block {block_num}", "uid": tag["uid_hex"], "request_id": request_id}
+                    return {
+                        "success": False,
+                        "error": f"Failed to write block {block_num}",
+                        "uid": tag["uid_hex"],
+                        "request_id": request_id,
+                    }
 
             # Write signature to sector 2
             if signature:
@@ -386,14 +429,19 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
                     sig_raw = signature.encode("utf-8")[:48]
                     sig_padded = sig_raw + b"\x00" * (48 - len(sig_raw))
                     for i in range(3):
-                        nfc.mifare_write_block(sig_base + i, sig_padded[i*16:(i+1)*16])
+                        nfc.mifare_write_block(sig_base + i, sig_padded[i * 16 : (i + 1) * 16])
                     print("[WRITE] Signature written")
 
         blink(5, 50)
         return {"success": True, "uid": tag["uid_hex"], "request_id": request_id}
 
     except Exception as e:
-        return {"success": False, "error": str(e), "uid": tag.get("uid_hex", ""), "request_id": request_id}
+        return {
+            "success": False,
+            "error": str(e),
+            "uid": tag.get("uid_hex", ""),
+            "request_id": request_id,
+        }
 
 
 def main():
@@ -440,7 +488,10 @@ def main():
     # Initialer Heartbeat mit NFC-Status senden
     try:
         mqtt.publish_heartbeat(
-            nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(time.time())
+            nfc_ok=NFC_STATUS_OK,
+            nfc_error=NFC_ERROR_MSG,
+            uptime=int(time.time()),
+            requires_permission=config.REQUIRES_PERMISSION,
         )
     except MQTTError as e:
         print(f"[MAIN] Initialer Heartbeat fehlgeschlagen: {e}")
@@ -468,7 +519,10 @@ def main():
             if now - heartbeat_timer > 60:
                 try:
                     mqtt.publish_heartbeat(
-                        nfc_ok=NFC_STATUS_OK, nfc_error=NFC_ERROR_MSG, uptime=int(now)
+                        nfc_ok=NFC_STATUS_OK,
+                        nfc_error=NFC_ERROR_MSG,
+                        uptime=int(now),
+                        requires_permission=config.REQUIRES_PERMISSION,
                     )
                     print("[HEARTBEAT] Status gesendet")
                 except MQTTError as e:
@@ -494,11 +548,13 @@ def main():
                 if current_write_job and now > current_write_job["timeout"]:
                     print("[WRITE] Job timeout - clearing")
                     try:
-                        mqtt.publish_write_response({
-                            "success": False,
-                            "error": "Timeout - no card presented within 30s",
-                            "request_id": current_write_job.get("request_id", "")
-                        })
+                        mqtt.publish_write_response(
+                            {
+                                "success": False,
+                                "error": "Timeout - no card presented within 30s",
+                                "request_id": current_write_job.get("request_id", ""),
+                            }
+                        )
                     except MQTTError:
                         pass
                     current_write_job = None
