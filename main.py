@@ -7,7 +7,7 @@ import json
 import time
 
 import wifi
-from machine import I2C, Pin
+from machine import I2C, Pin, PWM
 
 import config
 from lib.mqtt_manager import MQTTError, MQTTManager
@@ -25,6 +25,64 @@ MIFARE_DEFAULT_KEY = b"\xff\xff\xff\xff\xff\xff"
 # Onboard-LED als Statusanzeige
 led = Pin("LED", Pin.OUT)
 led_state = False
+
+# RGB LED (common cathode) - Pinout Testing
+# Test results:
+# - GPIO 14=R, 15=G, 16=B → showed blue instead of green
+# - GPIO 14=R, 16=G, 15=B → showed red instead of green
+# - GPIO 15=R, 14=G, 16=B → testing
+rgb_red = PWM(Pin(15, Pin.OUT))
+rgb_green = PWM(Pin(14, Pin.OUT))
+rgb_blue = PWM(Pin(16, Pin.OUT))
+rgb_red.freq(1000)
+rgb_green.freq(1000)
+rgb_blue.freq(1000)
+
+
+def set_rgb(r: int, g: int, b: int):
+    """Setze RGB-Farbwerte (0-255). Common cathode: higher = brighter."""
+    # Scale 0-255 to 0-65535 (PWM range)
+    rgb_red.duty_u16(int(r * 65535 / 255))
+    rgb_green.duty_u16(int(g * 65535 / 255))
+    rgb_blue.duty_u16(int(b * 65535 / 255))
+
+
+def rgb_off():
+    set_rgb(0, 0, 0)
+
+
+def rainbow_cycle(delay_ms: int = 500):
+    """Blende durch alle Farben des Regenbogens."""
+    colors = [
+        (255, 0, 0),  # Rot
+        (255, 127, 0),  # Orange
+        (255, 255, 0),  # Gelb
+        (0, 255, 0),  # Grün
+        (0, 0, 255),  # Blau
+        (75, 0, 130),  # Indigo
+        (148, 0, 211),  # Violett
+        (255, 0, 0),  # Zurück zu Rot
+    ]
+    for r, g, b in colors:
+        set_rgb(r, g, b)
+        time.sleep_ms(delay_ms)
+    rgb_off()
+
+
+def pulse_rgb(r: int, g: int, b: int, cycle_time_ms: int = 2000):
+    """Pulse eine Farbe sanft ein und aus."""
+    # Fade in (0 to 255)
+    steps = 50
+    for i in range(steps):
+        intensity = int(255 * (1 - (i / steps) ** 2))  # Parabolic curve for smoother fade
+        set_rgb(int(r * intensity / 255), int(g * intensity / 255), int(b * intensity / 255))
+        time.sleep_ms(cycle_time_ms // (steps * 2))
+    # Fade out (255 to 0)
+    for i in range(steps):
+        intensity = int(255 * ((i / steps) ** 2))
+        set_rgb(int(r * intensity / 255), int(g * intensity / 255), int(b * intensity / 255))
+        time.sleep_ms(cycle_time_ms // (steps * 2))
+
 
 # NFC-Hardware-Status
 NFC_STATUS_OK = False
@@ -93,6 +151,24 @@ def blink(times: int = 1, on_ms: int = 100, off_ms: int = 100):
         led.on()
         time.sleep_ms(on_ms)
         led.off()
+        time.sleep_ms(off_ms)
+
+
+def rgb_blink(
+    times: int = 1, on_ms: int = 100, off_ms: int = 100, r: int = 255, g: int = 255, b: int = 255
+):
+    """Blinke mit RGB-LED in bestimmter Farbe."""
+    for _ in range(times):
+        set_rgb(r, g, b)
+        time.sleep_ms(on_ms)
+        rgb_off()
+        time.sleep_ms(off_ms)
+
+
+def rgb_rainbow_blink(times: int = 1, cycle_delay_ms: int = 500):
+    """Blinke durch den Regenbogen mehrfach."""
+    for _ in range(times):
+        rainbow_cycle(cycle_delay_ms)
         time.sleep_ms(off_ms)
 
 
@@ -446,7 +522,8 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
 
 def main():
     print("\n=== Pico W NFC → MQTT ===\n")
-    blink(2, 200)  # Startblinken
+    rainbow_cycle(300)  # Regenbogen-Startblinken
+    blink(2, 200)  # Zusätzliches Blinken mit Onboard-LED
 
     # 1. WLAN
     try:
@@ -501,6 +578,8 @@ def main():
     ping_timer = time.time()
     heartbeat_timer = time.time()
     read_timer = time.time()
+    pulse_timer = time.time()
+    card_present = False
 
     # --- Hauptschleife ---
     try:
@@ -593,10 +672,12 @@ def main():
 
                 if tag is None:
                     last_uid = None  # Tag weg → Debounce zurücksetzen
+                    card_present = False
                     continue
 
                 uid = tag["uid_hex"]
                 print(f"[NFC] Tag erkannt: {uid} ({tag['tag_type']})")
+                card_present = True
 
                 # Check for pending write job
                 if current_write_job:
@@ -646,6 +727,15 @@ def main():
 
             else:
                 # Kurze Pause wenn kein NFC oder Reading Interval
+                # RGB pulsing based on card presence
+                if now - pulse_timer > 0.1:  # Update pulsing every 100ms
+                    pulse_timer = now
+                    if card_present:
+                        # Faster blue pulse when card present (500ms cycle)
+                        pulse_rgb(0, 0, 255, 500)
+                    else:
+                        # Slower green pulse when idle (2000ms cycle)
+                        pulse_rgb(0, 255, 0, 2000)
                 time.sleep_ms(50)
 
     except Exception as e:
