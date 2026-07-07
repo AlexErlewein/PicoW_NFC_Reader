@@ -3,12 +3,12 @@ RC522 (MFRC522) NFC Driver für MicroPython (SPI)
 Original von wendlers/micropython-mfrc522, erweitert für Pico W
 """
 
-from machine import Pin, SPI
 from os import uname
+
+from machine import SPI, Pin
 
 
 class MFRC522:
-
     OK = 0
     NOTAGERR = 1
     ERR = 2
@@ -31,14 +31,24 @@ class MFRC522:
 
         board = uname()[0]
 
-        if board == 'WiPy' or board == 'LoPy' or board == 'FiPy':
+        if board == "WiPy" or board == "LoPy" or board == "FiPy":
             self.spi = SPI(0)
             self.spi.init(SPI.MASTER, baudrate=1000000, pins=(self.sck, self.mosi, self.miso))
-        elif board == 'esp8266':
-            self.spi = SPI(baudrate=100000, polarity=0, phase=0, sck=self.sck, mosi=self.mosi, miso=self.miso)
+        elif board == "esp8266":
+            self.spi = SPI(
+                baudrate=100000, polarity=0, phase=0, sck=self.sck, mosi=self.mosi, miso=self.miso
+            )
             self.spi.init()
-        elif board == 'rp2' or board == 'Raspberry Pi Pico W':
-            self.spi = SPI(0, baudrate=100000, polarity=0, phase=0, sck=self.sck, mosi=self.mosi, miso=self.miso)
+        elif board == "rp2" or board == "Raspberry Pi Pico W":
+            self.spi = SPI(
+                0,
+                baudrate=100000,
+                polarity=0,
+                phase=0,
+                sck=self.sck,
+                mosi=self.mosi,
+                miso=self.miso,
+            )
         else:
             raise RuntimeError("Unsupported platform")
 
@@ -48,14 +58,14 @@ class MFRC522:
     def _wreg(self, reg, val):
 
         self.cs.value(0)
-        self.spi.write(b'%c' % int(0xff & ((reg << 1) & 0x7e)))
-        self.spi.write(b'%c' % int(0xff & val))
+        self.spi.write(b"%c" % int(0xFF & ((reg << 1) & 0x7E)))
+        self.spi.write(b"%c" % int(0xFF & val))
         self.cs.value(1)
 
     def _rreg(self, reg):
 
         self.cs.value(0)
-        self.spi.write(b'%c' % int(0xff & (((reg << 1) & 0x7e) | 0x80)))
+        self.spi.write(b"%c" % int(0xFF & (((reg << 1) & 0x7E) | 0x80)))
         val = self.spi.read(1)
         self.cs.value(1)
 
@@ -426,7 +436,7 @@ class MFRC522:
             (stat, recv, bits) = self._tocard(0x0C, buf)
         return stat
 
-    def mifare_authenticate(self, uid, block, key=b'\xff\xff\xff\xff\xff\xff', key_type="A"):
+    def mifare_authenticate(self, uid, block, key=b"\xff\xff\xff\xff\xff\xff", key_type="A"):
         """PN522-compatible authenticate wrapper for RC522."""
         mode = self.AUTHENT1A if key_type == "A" else self.AUTHENT1B
         self.select_tag(list(uid))

@@ -4,10 +4,12 @@ NFC-Tags per SPI lesen und via MQTT weiterleiten.
 """
 
 import json
+import math
 import time
+from array import array
 
 import wifi
-from machine import I2C, Pin, PWM
+from machine import I2C, PWM, Pin, Timer
 
 import config
 from lib.mqtt_manager import MQTTError, MQTTManager
@@ -26,25 +28,60 @@ MIFARE_DEFAULT_KEY = b"\xff\xff\xff\xff\xff\xff"
 led = Pin("LED", Pin.OUT)
 led_state = False
 
-# RGB LED (common cathode) - Pinout Testing
-# Test results:
-# - GPIO 14=R, 15=G, 16=B → showed blue instead of green
-# - GPIO 14=R, 16=G, 15=B → showed red instead of green
-# - GPIO 15=R, 14=G, 16=B → testing
+# RGB LED - Pinout: R=GP15, G=GP14, B=GP16
 rgb_red = PWM(Pin(15, Pin.OUT))
-rgb_green = PWM(Pin(14, Pin.OUT))
 rgb_blue = PWM(Pin(16, Pin.OUT))
 rgb_red.freq(1000)
-rgb_green.freq(1000)
 rgb_blue.freq(1000)
+
+# Green LED unusable on some boards: either the green LED is defective
+# (led_green_defect) or the pins are swapped so GPIO14 is the common pin
+# and one anode is tied to GND (led_pins_swapped). When set, blue is used
+# for idle & success and red remains for errors.
+_GREEN_AVAILABLE = not (config.LED_GREEN_DEFECT or config.LED_PINS_SWAPPED)
+
+# Common-anode LEDs invert the PWM logic: drive a channel LOW to turn a color
+# ON, and the common pin must be held HIGH (3.3V) instead of LOW (GND).
+_COMMON_ANODE = config.LED_COMMON_ANODE
+_PWM_OFF = 65535 if _COMMON_ANODE else 0
+
+if config.LED_PINS_SWAPPED:
+    # GPIO14 is wired as the common pin instead of a real GND/VCC rail.
+    # Drive it as a plain digital output (solid HIGH or LOW depending on
+    # polarity) so the other colors can source/sink current reliably.
+    rgb_common = Pin(14, Pin.OUT)
+    if _COMMON_ANODE:
+        rgb_common.high()
+    else:
+        rgb_common.low()
+
+    class _NullPWM:
+        """No-op stand-in so set_rgb()/update_led() can call duty_u16/freq
+        without touching the pin that is now a digital common pin."""
+
+        def duty_u16(self, _val: int):
+            pass
+
+        def freq(self, _freq: int):
+            pass
+
+    rgb_green = _NullPWM()
+else:
+    rgb_green = PWM(Pin(14, Pin.OUT))
+    rgb_green.freq(10000)
 
 
 def set_rgb(r: int, g: int, b: int):
-    """Setze RGB-Farbwerte (0-255). Common cathode: higher = brighter."""
-    # Scale 0-255 to 0-65535 (PWM range)
-    rgb_red.duty_u16(int(r * 65535 / 255))
-    rgb_green.duty_u16(int(g * 65535 / 255))
-    rgb_blue.duty_u16(int(b * 65535 / 255))
+    """Setze RGB-Farbwerte (0-255). Common cathode: higher = brighter.
+    Common anode: inverted internally (drive LOW = ON)."""
+    # r*257 == r*65535//255; integer-only so it's safe to call from the timer ISR
+    if not _GREEN_AVAILABLE:
+        g = 0
+    if _COMMON_ANODE:
+        r, g, b = 255 - r, 255 - g, 255 - b
+    rgb_red.duty_u16(r * 257)
+    rgb_green.duty_u16(g * 257)
+    rgb_blue.duty_u16(b * 257)
 
 
 def rgb_off():
@@ -69,7 +106,7 @@ def rainbow_cycle(delay_ms: int = 500):
     rgb_off()
 
 
-def pulse_rgb(r: int, g: int, b: int, cycle_time_ms: int = 2000):
+def pulse_rgb(r: int, g: int, b: int, cycle_time_ms: int = 200):
     """Pulse eine Farbe sanft ein und aus."""
     # Fade in (0 to 255)
     steps = 50
@@ -92,10 +129,35 @@ NFC_ERROR_MSG = None
 current_write_job = None  # Pending write operation
 WRITE_TIMEOUT_S = 30  # Seconds to wait for card presentation
 
+# LED state management
+LED_STATE_IDLE = "idle"  # Green fading in and out
+LED_STATE_SCANNING = "scanning"  # Blue solid when tag detected
+LED_STATE_SUCCESS = "success"  # Fast green blink on success
+LED_STATE_ERROR = "error"  # Red blink on error
+current_led_state = LED_STATE_IDLE
+LED_SCAN_DISPLAY_MS = 2000  # Show blue LED for 2s when scanning
+LED_SUCCESS_BLINK_COUNT = 10  # Number of green blinks on success
+LED_ERROR_BLINK_COUNT = 3  # Number of red blinks on error
+LED_BREATH_PERIOD_MS = 2500  # Full breath in+out cycle time
+LED_TICK_MS = 10  # Hardware-timer tick for LED animation (100 Hz)
+_BREATH_LEN = 256
+# Precomputed raised-cosine brightness table (0 -> full -> 0) for a smooth
+# breathing curve; uint16 maps directly to duty_u16. Indexed inside the ISR.
+BREATH_TABLE = array(
+    "H",
+    (
+        int(65535 * (0.5 - 0.5 * math.cos(2 * math.pi * i / _BREATH_LEN)))
+        for i in range(_BREATH_LEN)
+    ),
+)
+led_anim_ms = 0  # Animation counter – advanced by real elapsed time on each LED update
+led_last_update_ms = 0  # ticks_ms of the previous LED update
+led_next_state = None  # State to transition to after current state's delay
+
 
 def handle_command(topic: bytes, msg: bytes):
     """Verarbeitet eingehende MQTT-Commands."""
-    global led_state, current_write_job
+    global led_state, current_write_job, current_led_state
     try:
         # Try to parse as JSON first (for structured commands)
         try:
@@ -107,22 +169,22 @@ def handle_command(topic: bytes, msg: bytes):
         if isinstance(cmd, str):
             print(f"[CMD] Received: {cmd}")
             if cmd == "led_toggle":
-                led_state = not led_state
+                # Toggle between idle and off
+                if current_led_state == LED_STATE_IDLE:
+                    rgb_off()
+                    current_led_state = "off"
+                else:
+                    set_led_state(LED_STATE_IDLE)
             elif cmd == "led_on":
-                led_state = True
+                set_led_state(LED_STATE_IDLE)
+                print("[CMD] LED turned ON (idle mode)")
             elif cmd == "led_off":
-                led_state = False
+                rgb_off()
+                current_led_state = "off"
+                print("[CMD] LED turned OFF")
             else:
                 print(f"[CMD] Unknown command: {cmd}")
                 return
-
-            # Apply LED state
-            if led_state:
-                led.on()
-                print("[CMD] LED turned ON")
-            else:
-                led.off()
-                print("[CMD] LED turned OFF")
             return
 
         # JSON command handling
@@ -169,7 +231,100 @@ def rgb_rainbow_blink(times: int = 1, cycle_delay_ms: int = 500):
     """Blinke durch den Regenbogen mehrfach."""
     for _ in range(times):
         rainbow_cycle(cycle_delay_ms)
-        time.sleep_ms(off_ms)
+        time.sleep_ms(100)
+
+
+def set_led_state(state: str):
+    """Set the current LED state and reset timer.
+
+    Timers are reset BEFORE flipping the state so the timer ISR can never
+    observe a fresh state with a stale animation counter (which would cause
+    a one-frame glitch or a spurious transition)."""
+    global current_led_state, led_anim_ms, led_last_update_ms
+    led_anim_ms = 0
+    led_last_update_ms = time.ticks_ms()
+    current_led_state = state
+
+
+def update_led():
+    """Update LED based on current state. Call this regularly in main loop."""
+    global current_led_state, led_anim_ms, led_last_update_ms, led_next_state
+
+    if current_led_state == "off":
+        rgb_off()
+        return
+
+    if current_led_state == "nfc_error":
+        # NFC hardware not available — solid red indicator
+        set_rgb(255, 0, 0)
+        return
+
+    # Advance the animation by the real time elapsed since the last update, so
+    # the animation stays at the correct speed even if the loop is busy (e.g.
+    # during NFC reads). Capped to avoid a big jump after a long blocking pause.
+    # Reset to 0 on each state change, so transitions don't jump.
+    now_ms = time.ticks_ms()
+    delta = time.ticks_diff(now_ms, led_last_update_ms)
+    led_last_update_ms = now_ms
+    if delta < 0:
+        delta = 0
+    elif delta > 250:
+        delta = 250
+    led_anim_ms += delta
+    elapsed_ms = led_anim_ms
+
+    if current_led_state == LED_STATE_IDLE:
+        idx = (elapsed_ms * _BREATH_LEN // LED_BREATH_PERIOD_MS) % _BREATH_LEN
+        val = BREATH_TABLE[idx]
+        if _COMMON_ANODE:
+            val = 65535 - val
+        rgb_red.duty_u16(_PWM_OFF)
+        if _GREEN_AVAILABLE:
+            rgb_green.duty_u16(val)
+            rgb_blue.duty_u16(_PWM_OFF)
+        else:
+            rgb_green.duty_u16(_PWM_OFF)
+            rgb_blue.duty_u16(val)
+        return
+
+    if current_led_state == LED_STATE_SCANNING:
+        set_rgb(0, 0, 255)
+        if elapsed_ms >= LED_SCAN_DISPLAY_MS and led_next_state is not None:
+            next_state = led_next_state
+            led_next_state = None
+            set_led_state(next_state)
+        return
+
+    if current_led_state == LED_STATE_SUCCESS:
+        blink_pos = elapsed_ms // 100
+        if blink_pos < LED_SUCCESS_BLINK_COUNT * 2:
+            if blink_pos % 2 == 0:
+                if _GREEN_AVAILABLE:
+                    set_rgb(0, 255, 0)
+                else:
+                    set_rgb(0, 0, 255)
+            else:
+                set_rgb(0, 0, 0)
+        else:
+            set_led_state(LED_STATE_IDLE)
+        return
+
+    if current_led_state == LED_STATE_ERROR:
+        blink_pos = elapsed_ms // 200
+        if blink_pos < LED_ERROR_BLINK_COUNT * 2:
+            if blink_pos % 2 == 0:
+                set_rgb(255, 0, 0)
+            else:
+                set_rgb(0, 0, 0)
+        else:
+            set_led_state(LED_STATE_IDLE)
+        return
+
+
+def _led_timer_cb(_timer):
+    """Hardware-timer ISR: advances the LED animation independently of the
+    main loop, so breathing continues during blocking NFC reads / sleeps."""
+    update_led()
 
 
 def get_timestamp() -> str:
@@ -521,6 +676,7 @@ def perform_card_write(nfc: RC522, tag: dict, job: dict) -> dict:
 
 
 def main():
+    global led_next_state, current_led_state, current_write_job
     print("\n=== Pico W NFC → MQTT ===\n")
     rainbow_cycle(300)  # Regenbogen-Startblinken
     blink(2, 200)  # Zusätzliches Blinken mit Onboard-LED
@@ -556,6 +712,9 @@ def main():
     if nfc is None:
         print("[WARNUNG] NFC-Hardware nicht verfügbar - MQTT läuft ohne NFC")
         blink(4, 150)  # 4× mittel = NFC Fehler, aber weiter
+        # Set solid red to indicate NFC hardware error
+        set_rgb(255, 0, 0)
+        current_led_state = "nfc_error"
     else:
         print("[NFC] Hardware erfolgreich initialisiert")
         blink(1, 500)  # 1× lang = alles OK
@@ -578,23 +737,31 @@ def main():
     ping_timer = time.time()
     heartbeat_timer = time.time()
     read_timer = time.time()
-    pulse_timer = time.time()
     card_present = False
+
+    # Initialize LED state
+    set_led_state(LED_STATE_IDLE)
+
+    # Drive the LED animation from a hardware timer so it keeps running
+    # smoothly even while the main loop blocks on NFC reads / sleeps.
+    led_timer = Timer(period=LED_TICK_MS, mode=Timer.PERIODIC, callback=_led_timer_cb)
 
     # --- Hauptschleife ---
     try:
         while True:
             now = time.time()
 
-            # 0. MQTT Messages prüfen (non-blocking)
+            # LED update now runs in the timer ISR (_led_timer_cb).
+
+            # 1. MQTT Messages prüfen (non-blocking)
             mqtt.check_messages()
 
-            # 1. MQTT Keepalive (alle 30s)
+            # 2. MQTT Keepalive (alle 30s)
             if now - ping_timer > 30:
                 mqtt.ping()
                 ping_timer = now
 
-            # 2. Heartbeat mit NFC-Status (alle 60s)
+            # 3. Heartbeat mit NFC-Status (alle 60s)
             if now - heartbeat_timer > 60:
                 try:
                     mqtt.publish_heartbeat(
@@ -608,7 +775,7 @@ def main():
                     print(f"[HEARTBEAT] Fehler: {e}")
                 heartbeat_timer = now
 
-            # 3. MQTT Reconnect wenn nötig
+            # 4. MQTT Reconnect wenn nötig
             if not mqtt.is_connected():
                 print("[MAIN] MQTT getrennt, reconnect …")
                 if mqtt.connect():
@@ -618,9 +785,10 @@ def main():
                     time.sleep(5)
                     continue
 
-            # 4. NFC lesen (nur wenn Hardware verfügbar)
+            # 5. NFC lesen (nur wenn Hardware verfügbar)
             if nfc is not None and (now - read_timer) > (config.READ_INTERVAL_MS / 1000):
                 read_timer = now
+                tag = None  # Initialize tag to handle exception cases
 
                 # Check for write job timeout
                 global current_write_job
@@ -654,7 +822,9 @@ def main():
 
                     elif config.RFID_READER_TYPE == "pn522":
                         # PN522 API: read_passive_target() -> tag dict
-                        tag = nfc.read_passive_target(timeout=0.5)
+                        # Short timeout keeps the loop responsive for LED updates;
+                        # cards usually rest on the scanner long enough to be caught.
+                        tag = nfc.read_passive_target(timeout=0.05)
 
                         # If write job pending and no card detected, wait and retry
                         # (card may be in ACTIVE state from previous read_card_data)
@@ -667,17 +837,28 @@ def main():
 
                 except Exception as e:
                     print(f"[NFC] Lesefehler: {e}")
+                    if config.RFID_READER_TYPE == "pn522" and hasattr(nfc, "reset_rf_field"):
+                        nfc.reset_rf_field()
+                        time.sleep_ms(50)
                     time.sleep_ms(500)
                     continue
 
                 if tag is None:
                     last_uid = None  # Tag weg → Debounce zurücksetzen
                     card_present = False
+                    led_next_state = None
+                    if current_led_state == LED_STATE_SCANNING:
+                        set_led_state(LED_STATE_IDLE)
+                    time.sleep_ms(50)
                     continue
 
                 uid = tag["uid_hex"]
                 print(f"[NFC] Tag erkannt: {uid} ({tag['tag_type']})")
                 card_present = True
+
+                # Set LED to blue when tag is detected (don't reset timer if already scanning)
+                if current_led_state != LED_STATE_SCANNING:
+                    set_led_state(LED_STATE_SCANNING)
 
                 # Check for pending write job
                 if current_write_job:
@@ -695,15 +876,23 @@ def main():
                     except MQTTError:
                         pass
 
-                    led.on()
-                    time.sleep_ms(100)
-                    led.off()
+                    # Set LED state based on write result
+                    if result.get("success"):
+                        set_led_state(LED_STATE_SUCCESS)
+                    else:
+                        set_led_state(LED_STATE_ERROR)
+
                     last_uid = uid
                     last_seen = now
                     continue
 
                 # Debounce: gleichen Tag nicht zu oft senden
-                if uid == last_uid and (now - last_seen) < config.DEBOUNCE_SAME_TAG_S:
+                # Extended to cover full LED cycle (2s blue + 2s success or 1.2s error)
+                led_cycle_time = (LED_SCAN_DISPLAY_MS + (LED_SUCCESS_BLINK_COUNT * 200)) / 1000
+                debounce_time = max(config.DEBOUNCE_SAME_TAG_S, led_cycle_time)
+                if uid == last_uid and (now - last_seen) < debounce_time:
+                    if current_led_state == LED_STATE_SCANNING and led_next_state is None:
+                        set_led_state(LED_STATE_IDLE)
                     continue
 
                 # Read stored member data from card
@@ -717,25 +906,24 @@ def main():
                     if card_data:
                         extra.update(card_data)
                     mqtt.publish_tag(tag, extra=extra)
-                    led.on()
-                    time.sleep_ms(50)
-                    led.off()
+
+                    # Defer LED transition — show blue for LED_SCAN_DISPLAY_MS first
+                    if card_data:
+                        led_next_state = LED_STATE_SUCCESS  # Recognized card - green blink
+                    else:
+                        led_next_state = LED_STATE_ERROR  # Unrecognized card - red blink
+
                     last_uid = uid
                     last_seen = now
                 except MQTTError as e:
                     print(f"[MAIN] Publish-Fehler: {e}")
+                    set_led_state(LED_STATE_ERROR)  # Error - red blink
+                except Exception as e:
+                    print(f"[MAIN] Unexpected error: {e}")
+                    set_led_state(LED_STATE_ERROR)  # Error - red blink
 
             else:
                 # Kurze Pause wenn kein NFC oder Reading Interval
-                # RGB pulsing based on card presence
-                if now - pulse_timer > 0.1:  # Update pulsing every 100ms
-                    pulse_timer = now
-                    if card_present:
-                        # Faster blue pulse when card present (500ms cycle)
-                        pulse_rgb(0, 0, 255, 500)
-                    else:
-                        # Slower green pulse when idle (2000ms cycle)
-                        pulse_rgb(0, 255, 0, 2000)
                 time.sleep_ms(50)
 
     except Exception as e:
@@ -743,6 +931,8 @@ def main():
         blink(5, 100)
     finally:
         # Aufräumen beim Beenden
+        led_timer.deinit()
+        rgb_off()
         print("[MAIN] Beende...")
         try:
             mqtt.publish_status("offline")

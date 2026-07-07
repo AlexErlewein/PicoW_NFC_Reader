@@ -41,3 +41,13 @@ I2C_FREQ = CONFIG["i2c_freq"]
 # Betriebsparameter
 READ_INTERVAL_MS = CONFIG["read_interval_ms"]
 DEBOUNCE_SAME_TAG_S = CONFIG["debounce_same_tag_s"]
+
+# LED Hardware-Konfiguration
+# led_green_defect: Grüne LED ist defekt → Blau für Idle & Success, Rot für Error.
+# led_pins_swapped: GPIO14 ist der Common-Pin (statt GND/VCC), eine Anode auf GND
+#                  → nur Blau und Rot nutzbar, Grün-Kanal wird immer auf 0 gehalten.
+# led_common_anode: LED ist Common-Anode (statt Common-Cathode) → PWM invertiert,
+#                   Common-Pin wird auf HIGH gezogen.
+LED_GREEN_DEFECT = CONFIG.get("led_green_defect", False)
+LED_PINS_SWAPPED = CONFIG.get("led_pins_swapped", False)
+LED_COMMON_ANODE = CONFIG.get("led_common_anode", False)
