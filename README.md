@@ -45,7 +45,8 @@ pico-nfc-mqtt/
 │   ├── mqtt_manager.py   # MQTT Client Wrapper
 │   └── wifi.py           # WLAN-Verbindung
 ├── scripts/
-│   └── deploy.sh         # Deployment auf Pico W
+│   ├── deploy.ps1         # Deployment auf Pico W (PowerShell)
+│   └── deploy.sh          # Deployment auf Pico W (bash)
 └── .zed/
     └── tasks.json        # Zed Build-Tasks
 ```
@@ -63,11 +64,17 @@ pico-nfc-mqtt/
 
 ### 2. Entwicklungsumgebung einrichten (uv)
 
-```bash
+```powershell
 # uv installieren (falls noch nicht vorhanden)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 # Im Projektverzeichnis: virtualenv erstellen & alle Tools installieren
+uv sync
+```
+
+```bash
+# Alternative unter bash/Linux/macOS:
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 ```
 
@@ -75,28 +82,60 @@ Das installiert automatisch: `mpremote`, `ruff`, `pyright` und MicroPython-Stubs
 
 ### 3. Konfiguration anpassen
 
-```bash
+```powershell
 # example-config.json nach config.json kopieren
-cp example-config.json config.json
+Copy-Item example-config.json config.json
 
-# config.json öffnen und anpassen:
+# config.json oeffnen und anpassen:
 # - wifi_ssid / wifi_password
-# - mqtt_broker – IP-Adresse des Raspberry Pi
+# - mqtt_broker - IP-Adresse des Raspberry Pi
 ```
 
-### 4. Auf Pico deployen (Zed Task oder manuell)
+```bash
+# Alternative unter bash:
+cp example-config.json config.json
+```
 
-**Via Zed:** `Cmd+Shift+P` → *Run Task* → *Deploy → Pico W*
+### 4. Auf Pico deployen
 
-**Manuell:**
+#### PowerShell: Skript-Ausführung erlauben (einmalig)
+
+Windows blockiert `.ps1`-Skripte standardmäßig. Einmalig ausführen:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Dadurch dürfen lokale Skripte ausgeführt werden; nur heruntergeladene Skripte brauchen weiterhin eine Signatur. Prüfen mit `Get-ExecutionPolicy -List`.
+
+Alternativ ohne Policy-Änderung (gilt nur für einen Aufruf):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1
+```
+
+**Manuell (PowerShell):**
+```powershell
+.\scripts\deploy.ps1                # auto-Port
+.\scripts\deploy.ps1 -Port COM5     # expliziter Port
+```
+
+**Manuell (bash):**
 ```bash
 bash scripts/deploy.sh
 ```
 
-Einzelne mpremote-Befehle immer via `uv run mpremote …` aufrufen, z.B.:
+Einzelne mpremote-Befehle immer via `uv run python -m mpremote …` aufrufen
+(`python -m` statt `mpremote` direkt, da App-Control-Policies wie Smart App Control
+die generierten `mpremote.exe`-Launcher blockieren können), z.B. (PowerShell):
+```powershell
+uv run python -m mpremote ls :
+uv run python -m mpremote repl
+```
 ```bash
-uv run mpremote ls :
-uv run mpremote repl
+# bzw. unter bash:
+uv run python -m mpremote ls :
+uv run python -m mpremote repl
 ```
 
 ---
@@ -170,6 +209,11 @@ Topic: `nfc/tag`
 ---
 
 ## Fehlerbehebung
+
+**Eine Anwendungssteuerungsrichtlinie hat diese Datei blockiert:**
+- Smart App Control (Windows) blockiert teils un-signierte/neue Binärdateien. Das Projekt ist deshalb auf **Python 3.12** gepinnt (`.python-version`) – neuere uv-Pythons (z. B. 3.13/3.15) werden teils blockiert.
+- `mpremote` immer als `uv run python -m mpremote` aufrufen, nicht als `mpremote.exe`.
+- Status prüfen: `Get-MpComputerStatus` → `SmartAppControlState` (1 = Evaluation, 2 = On)
 
 kein USB: sudo usermod -aG dialout alex
 

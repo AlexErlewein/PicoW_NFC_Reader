@@ -10,13 +10,21 @@ set -e
 cd "$(dirname "$0")/.."
 
 # mpremote finden - verschiedene Methoden für Windows/Unix
+# Hinweis: "python -m mpremote" statt mpremote.exe, da App-Control-Policies
+# (z.B. Smart App Control) die generierten .exe-Launcher blockieren können
 if command -v uv &> /dev/null; then
-    MPREMOTE="uv run mpremote"
-elif [ -f ".venv/Scripts/mpremote.exe" ]; then
+    MPREMOTE="uv run python -m mpremote"
+elif [ -f ".venv/Scripts/python.exe" ]; then
     # Windows venv
+    MPREMOTE=".venv/Scripts/python.exe -m mpremote"
+elif [ -f ".venv/bin/python" ]; then
+    # Unix venv
+    MPREMOTE=".venv/bin/python -m mpremote"
+elif [ -f ".venv/Scripts/mpremote.exe" ]; then
+    # Windows venv (Fallback)
     MPREMOTE=".venv/Scripts/mpremote.exe"
 elif [ -f ".venv/bin/mpremote" ]; then
-    # Unix venv
+    # Unix venv (Fallback)
     MPREMOTE=".venv/bin/mpremote"
 else
     echo "Fehler: mpremote nicht gefunden!"
